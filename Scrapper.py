@@ -4,110 +4,193 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium import webdriver
+from selenium.common.exceptions import TimeoutException, WebDriverException
 import time
+import logging
+import json
+from datetime import datetime
+from config import BROWSER_OPTIONS, TIMEOUTS, CREDENTIALS, URLS, LOGGING
+import os
 
+# Configuração do logging
+logging.basicConfig(
+    level=getattr(logging, LOGGING["level"]),
+    format=LOGGING["format"],
+    handlers=[
+        logging.FileHandler(LOGGING["file"]),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
-# Função para iniciar o navegador
-def iniciar_navegador():
-    try:
-        options = webdriver.ChromeOptions()
-        options.add_argument("--disable-popup-blocking")  # Desativa o bloqueio de pop-ups
-        driver = uc.Chrome(options=options)
-        return driver
-    except Exception as e:
-        print(f"Erro ao iniciar o navegador: {e}")
-        return None
+class OlxScraper:
+    def __init__(self):
+        self.driver = None
+        self.wait = None
+        self.links_cache = set()
+        self.load_cache()
 
+    def load_cache(self):
+        """Carrega o cache de links já processados"""
+        try:
+            if os.path.exists('links_cache.json'):
+                with open('links_cache.json', 'r') as f:
+                    self.links_cache = set(json.load(f))
+                logger.info(f"Cache carregado com {len(self.links_cache)} links")
+        except Exception as e:
+            logger.error(f"Erro ao carregar cache: {e}")
 
-# Função para aceitar cookies
-def aceitar_cookies(driver, wait):
-    try:
-        cookie_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="onetrust-accept-btn-handler"]')))
-        cookie_button.click()
-        print("Cookies aceitos.")
-    except Exception as e:
-        print(f"Não foi possível aceitar os cookies: {e}")
+    def save_cache(self):
+        """Salva o cache de links processados"""
+        try:
+            with open('links_cache.json', 'w') as f:
+                json.dump(list(self.links_cache), f)
+            logger.info("Cache salvo com sucesso")
+        except Exception as e:
+            logger.error(f"Erro ao salvar cache: {e}")
 
-# Função para fazer login
-def login(driver, wait):
-    try:
-        loginAccount_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="mainContent"]/div/div[2]/section/div/div/button')))
-        loginAccount_button.click()
+    def iniciar_navegador(self):
+        """Inicia o navegador com as configurações especificadas"""
+        try:
+            options = webdriver.ChromeOptions()
+            if BROWSER_OPTIONS["disable_popup_blocking"]:
+                options.add_argument("--disable-popup-blocking")
+            if BROWSER_OPTIONS["headless"]:
+                options.add_argument("--headless")
+            
+            self.driver = uc.Chrome(options=options)
+            self.wait = WebDriverWait(self.driver, TIMEOUTS["element_wait"])
+            logger.info("Navegador iniciado com sucesso")
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao iniciar o navegador: {e}")
+            return False
 
-        username_field = wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="username"]')))
-        password_field = wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="password"]')))
-
-        username_field.send_keys("pedropacheco2709@gmail.com")
-        time.sleep(1)
-        password_field.send_keys("Manga27090")
-        password_field.send_keys(Keys.RETURN)
-        print("Login realizado.")
-    except Exception as e:
-        print(f"Erro no login: {e}")
-
-# Função para acessar a página de favoritos e coletar os links
-def acessar_favoritos(driver, wait):
-    try:
-        wait.until(EC.visibility_of_element_located((By.XPATH, '//*[@id="mainContent"]/div/div[2]/section/div[2]/div')))
-        favoritos = wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "css-qo0cxu")))
-
-        links = set()  # Usando um set para evitar duplicatas
-
-        for favorito in favoritos:
+    def aceitar_cookies(self):
+        """Aceita os cookies do site"""
+        for attempt in range(TIMEOUTS["max_retries"]):
             try:
-                link = favorito.get_attribute("href")
-                if link and link not in links:
-                    links.add(link.replace("?", "?chat=1&isPreviewActive=0&"))
-
+                cookie_button = self.wait.until(
+                    EC.element_to_be_clickable((By.XPATH, '//*[@id="onetrust-accept-btn-handler"]'))
+                )
+                cookie_button.click()
+                logger.info("Cookies aceitos com sucesso")
+                return True
+            except TimeoutException:
+                logger.warning(f"Tentativa {attempt + 1} de aceitar cookies falhou")
+                time.sleep(TIMEOUTS["retry_delay"])
             except Exception as e:
-                print(f"Erro ao processar um favorito: {e}")
+                logger.error(f"Erro ao aceitar cookies: {e}")
+                return False
+        return False
 
-        print(f"{len(links)} links únicos encontrados.")
-        return list(links)  # Convertendo de volta para lista
+    def login(self):
+        """Realiza o login no site"""
+        for attempt in range(TIMEOUTS["max_retries"]):
+            try:
+                login_button = self.wait.until(
+                    EC.element_to_be_clickable((By.XPATH, '//*[@id="mainContent"]/div/div[2]/section/div/div/button'))
+                )
+                login_button.click()
 
-    except Exception as e:
-        print(f"Erro ao acessar favoritos: {e}")
-        return []
+                username_field = self.wait.until(
+                    EC.presence_of_element_located((By.XPATH, '//*[@id="username"]'))
+                )
+                password_field = self.wait.until(
+                    EC.presence_of_element_located((By.XPATH, '//*[@id="password"]'))
+                )
 
-# Função para abrir os anúncios em abas (sem duplicar)
-def abrir_anuncios_em_abas(driver, links):
-    for link in links:
+                username_field.send_keys(CREDENTIALS["username"])
+                time.sleep(1)
+                password_field.send_keys(CREDENTIALS["password"])
+                password_field.send_keys(Keys.RETURN)
+                
+                logger.info("Login realizado com sucesso")
+                return True
+            except TimeoutException:
+                logger.warning(f"Tentativa {attempt + 1} de login falhou")
+                time.sleep(TIMEOUTS["retry_delay"])
+            except Exception as e:
+                logger.error(f"Erro no login: {e}")
+                return False
+        return False
+
+    def acessar_favoritos(self):
+        """Acessa a página de favoritos e coleta os links"""
         try:
-            print(f"Abrindo: {link}")
-            driver.execute_script(f"window.open('{link}', '_blank');")
-            time.sleep(1)  # Pequeno delay para evitar bloqueios
+            self.wait.until(
+                EC.visibility_of_element_located((By.XPATH, '//*[@id="mainContent"]/div/div[2]/section/div[2]/div'))
+            )
+            favoritos = self.wait.until(
+                EC.presence_of_all_elements_located((By.CLASS_NAME, "css-qo0cxu"))
+            )
 
+            novos_links = set()
+            for favorito in favoritos:
+                try:
+                    link = favorito.get_attribute("href")
+                    if link and link not in self.links_cache:
+                        link_modificado = link.replace("?", "?chat=1&isPreviewActive=0&")
+                        novos_links.add(link_modificado)
+                        self.links_cache.add(link)
+                except Exception as e:
+                    logger.error(f"Erro ao processar um favorito: {e}")
+
+            logger.info(f"{len(novos_links)} novos links encontrados")
+            return list(novos_links)
         except Exception as e:
-            print(f"Erro ao abrir o link: {e}")
+            logger.error(f"Erro ao acessar favoritos: {e}")
+            return []
 
-# Função para finalizar a execução
-def finalizar(driver):
-    if driver:
+    def abrir_anuncios_em_abas(self, links):
+        """Abre os anúncios em novas abas"""
+        for link in links:
+            try:
+                logger.info(f"Abrindo: {link}")
+                self.driver.execute_script(f"window.open('{link}', '_blank');")
+                time.sleep(TIMEOUTS["retry_delay"])
+            except Exception as e:
+                logger.error(f"Erro ao abrir o link: {e}")
+
+    def finalizar(self):
+        """Finaliza a execução e limpa recursos"""
+        if self.driver:
+            try:
+                self.save_cache()
+                self.driver.quit()
+                logger.info("Navegador fechado com sucesso")
+            except Exception as e:
+                logger.error(f"Erro ao fechar o navegador: {e}")
+
+    def executar(self):
+        """Executa o processo completo"""
+        if not self.iniciar_navegador():
+            return False
+
         try:
-            driver.quit()
-            print("Navegador fechado.")
-        except Exception as e:
-            print(f"Erro ao fechar o navegador: {e}")
+            self.driver.get(URLS["favorites"])
+            
+            if not self.aceitar_cookies():
+                return False
+                
+            if not self.login():
+                return False
 
-# Função principal
+            links = self.acessar_favoritos()
+            if links:
+                self.abrir_anuncios_em_abas(links)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Erro durante a execução: {e}")
+            return False
+        finally:
+            self.finalizar()
+
 def main():
-    driver = iniciar_navegador()
-    if driver:
-        wait = WebDriverWait(driver, 10)
-
-        driver.get("https://www.olx.pt/favoritos/")
-
-        aceitar_cookies(driver, wait)
-        login(driver, wait)
-
-        # Coleta os links dos favoritos (sem duplicar)
-        links = acessar_favoritos(driver, wait)
-
-        # Abre os anúncios em abas
-        abrir_anuncios_em_abas(driver, links)
-
-        # Finaliza o navegador
-        finalizar(driver)
+    scraper = OlxScraper()
+    if not scraper.executar():
+        logger.error("Falha na execução do scraper")
 
 if __name__ == "__main__":
     main()
