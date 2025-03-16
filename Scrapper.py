@@ -11,6 +11,8 @@ import json
 from datetime import datetime
 from config import BROWSER_OPTIONS, TIMEOUTS, CREDENTIALS, URLS, LOGGING
 import os
+from database import Database
+from negotiator import SurfNegotiator
 
 # Configuração do logging
 logging.basicConfig(
@@ -27,27 +29,9 @@ class OlxScraper:
     def __init__(self):
         self.driver = None
         self.wait = None
-        self.links_cache = set()
-        self.load_cache()
-
-    def load_cache(self):
-        """Carrega o cache de links já processados"""
-        try:
-            if os.path.exists('links_cache.json'):
-                with open('links_cache.json', 'r') as f:
-                    self.links_cache = set(json.load(f))
-                logger.info(f"Cache carregado com {len(self.links_cache)} links")
-        except Exception as e:
-            logger.error(f"Erro ao carregar cache: {e}")
-
-    def save_cache(self):
-        """Salva o cache de links processados"""
-        try:
-            with open('links_cache.json', 'w') as f:
-                json.dump(list(self.links_cache), f)
-            logger.info("Cache salvo com sucesso")
-        except Exception as e:
-            logger.error(f"Erro ao salvar cache: {e}")
+        self.db = Database()
+        self.negotiator = SurfNegotiator()
+        self.conversation_handles = {}  # Dicionário para manter as handles das conversas
 
     def iniciar_navegador(self):
         """Inicia o navegador com as configurações especificadas"""
@@ -129,10 +113,9 @@ class OlxScraper:
             for favorito in favoritos:
                 try:
                     link = favorito.get_attribute("href")
-                    if link and link not in self.links_cache:
+                    if link and link not in self.conversation_handles:
                         link_modificado = link.replace("?", "?chat=1&isPreviewActive=0&")
                         novos_links.add(link_modificado)
-                        self.links_cache.add(link)
                 except Exception as e:
                     logger.error(f"Erro ao processar um favorito: {e}")
 
@@ -143,20 +126,83 @@ class OlxScraper:
             return []
 
     def abrir_anuncios_em_abas(self, links):
-        """Abre os anúncios em novas abas"""
+        """Abre os anúncios em novas abas e inicia as conversas"""
         for link in links:
             try:
                 logger.info(f"Abrindo: {link}")
                 self.driver.execute_script(f"window.open('{link}', '_blank');")
                 time.sleep(TIMEOUTS["retry_delay"])
+                
+                # Muda para a nova aba
+                self.driver.switch_to.window(self.driver.window_handles[-1])
+                
+                # Espera o chat carregar
+                self.wait.until(
+                    EC.presence_of_element_located((By.CLASS_NAME, "chat-messages"))
+                )
+                
+                # Obtém o ID do vendedor e informações do produto
+                seller_id = self.driver.find_element(By.CLASS_NAME, "seller-id").text
+                product_title = self.driver.find_element(By.CLASS_NAME, "product-title").text
+                product_price = float(self.driver.find_element(By.CLASS_NAME, "product-price").text.replace("€", "").strip())
+                
+                # Cria uma nova conversa no banco de dados
+                conversation_id = self.db.add_conversation(seller_id, product_title, product_price)
+                
+                # Guarda a handle da aba para referência futura
+                self.conversation_handles[link] = {
+                    'handle': self.driver.current_window_handle,
+                    'conversation_id': conversation_id
+                }
+                
+                # Volta para a aba principal
+                self.driver.switch_to.window(self.driver.window_handles[0])
+                
             except Exception as e:
                 logger.error(f"Erro ao abrir o link: {e}")
+                continue
+
+    def processar_mensagens(self):
+        """Processa mensagens em todas as conversas abertas"""
+        for link, info in self.conversation_handles.items():
+            try:
+                # Muda para a aba da conversa
+                self.driver.switch_to.window(info['handle'])
+                
+                # Verifica por novas mensagens
+                messages = self.driver.find_elements(By.CLASS_NAME, "message")
+                for message in messages:
+                    if message.get_attribute("data-processed") != "true":
+                        sender = message.get_attribute("data-sender")
+                        content = message.text
+                        
+                        # Processa a mensagem usando o negociador
+                        response = self.negotiator.process_message(
+                            info['conversation_id'],
+                            sender,
+                            content
+                        )
+                        
+                        # Envia a resposta
+                        if response:
+                            message_input = self.driver.find_element(By.CLASS_NAME, "message-input")
+                            message_input.send_keys(response)
+                            message_input.send_keys(Keys.RETURN)
+                        
+                        # Marca a mensagem como processada
+                        message.set_attribute("data-processed", "true")
+                
+                # Volta para a aba principal
+                self.driver.switch_to.window(self.driver.window_handles[0])
+                
+            except Exception as e:
+                logger.error(f"Erro ao processar mensagens da conversa {info['conversation_id']}: {e}")
+                continue
 
     def finalizar(self):
         """Finaliza a execução e limpa recursos"""
         if self.driver:
             try:
-                self.save_cache()
                 self.driver.quit()
                 logger.info("Navegador fechado com sucesso")
             except Exception as e:
@@ -176,9 +222,17 @@ class OlxScraper:
             if not self.login():
                 return False
 
-            links = self.acessar_favoritos()
-            if links:
-                self.abrir_anuncios_em_abas(links)
+            while True:
+                # Abre novas conversas
+                links = self.acessar_favoritos()
+                if links:
+                    self.abrir_anuncios_em_abas(links)
+                
+                # Processa mensagens existentes
+                self.processar_mensagens()
+                
+                # Espera um tempo antes da próxima verificação
+                time.sleep(TIMEOUTS["retry_delay"])
             
             return True
         except Exception as e:
