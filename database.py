@@ -1,236 +1,180 @@
-import sqlite3
-from datetime import datetime
-import hashlib
 import os
 from dotenv import load_dotenv
+from pymongo import MongoClient
+from datetime import datetime
+import hashlib
+import logging
+from mongodb_config import MONGODB_CONFIG, CURRENT_CONFIG
 
-load_dotenv()
+# Configuração do logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class Database:
-    def __init__(self, db_name="surf_negotiations.db"):
-        self.db_name = db_name
-        # Usa a conta do arquivo .env
-        self.account_username = os.getenv("OLX_USERNAME")
-        if not self.account_username:
+    def __init__(self):
+        """Inicializa a conexão com o MongoDB"""
+        load_dotenv()
+        self.username = os.getenv("OLX_USERNAME")
+        if not self.username:
             raise ValueError("OLX_USERNAME não encontrado no arquivo .env")
             
-        self.account_id = self.get_account_id(self.account_username)
-        if not self.account_id:
-            self.account_id = self.add_account(self.account_username)
+        # Obtém a configuração atual
+        config = MONGODB_CONFIG[CURRENT_CONFIG]
+        
+        try:
+            # Conecta ao MongoDB
+            self.client = MongoClient(config['uri'])
+            self.db = self.client[config['db_name']]
             
-        self.init_db()
-
-    def init_db(self):
-        """Inicializa o banco de dados com as tabelas necessárias"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-
-        # Tabela de contas
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS accounts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE,
-            created_at TIMESTAMP,
-            last_used TIMESTAMP,
-            status TEXT
-        )
-        ''')
-
-        # Tabela de conversas (agora com account_id)
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS conversations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER,
-            seller_hash TEXT,  # Hash do seller_id para anonimização
-            product_title TEXT,
-            product_price REAL,
-            status TEXT,
-            created_at TIMESTAMP,
-            last_updated TIMESTAMP,
-            FOREIGN KEY (account_id) REFERENCES accounts (id)
-        )
-        ''')
-
-        # Tabela de mensagens
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            conversation_id INTEGER,
-            sender TEXT,
-            content TEXT,
-            timestamp TIMESTAMP,
-            FOREIGN KEY (conversation_id) REFERENCES conversations (id)
-        )
-        ''')
-
-        # Tabela de estratégias (para compartilhar conhecimento entre contas)
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS strategies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER,
-            strategy_type TEXT,
-            success_rate REAL,
-            created_at TIMESTAMP,
-            last_used TIMESTAMP,
-            FOREIGN KEY (account_id) REFERENCES accounts (id)
-        )
-        ''')
-
-        conn.commit()
-        conn.close()
+            # Testa a conexão
+            self.client.server_info()
+            logger.info(f"Conectado ao MongoDB com sucesso usando configuração: {CURRENT_CONFIG}")
+            
+            # Obtém ou cria o ID da conta
+            self.account_id = self.get_account_id(self.username)
+            if not self.account_id:
+                self.account_id = self.add_account(self.username)
+                
+        except Exception as e:
+            logger.error(f"Erro ao conectar ao MongoDB: {e}")
+            raise
 
     def add_account(self, username):
-        """Adiciona uma nova conta"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        now = datetime.now()
-        cursor.execute('''
-        INSERT INTO accounts (username, created_at, last_used, status)
-        VALUES (?, ?, ?, ?)
-        ''', (username, now, now, 'active'))
-        
-        account_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        return account_id
+        """Adiciona uma nova conta ao banco de dados"""
+        try:
+            account = {
+                'username': username,
+                'created_at': datetime.now(),
+                'last_used': datetime.now(),
+                'status': 'active'
+            }
+            result = self.db.accounts.insert_one(account)
+            logger.info(f"Conta {username} criada com sucesso")
+            return str(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Erro ao criar conta: {e}")
+            return None
 
     def get_account_id(self, username):
-        """Retorna o ID da conta pelo username"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT id FROM accounts WHERE username = ?', (username,))
-        result = cursor.fetchone()
-        
-        conn.close()
-        return result[0] if result else None
+        """Obtém o ID de uma conta existente"""
+        try:
+            account = self.db.accounts.find_one({'username': username})
+            if account:
+                return str(account['_id'])
+            return None
+        except Exception as e:
+            logger.error(f"Erro ao buscar conta: {e}")
+            return None
 
     def hash_seller_id(self, seller_id):
-        """Gera um hash anônimo do seller_id"""
+        """Gera um hash para o ID do vendedor"""
         return hashlib.sha256(seller_id.encode()).hexdigest()
 
     def add_conversation(self, seller_id, product_title, product_price):
-        """Adiciona uma nova conversa"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        seller_hash = self.hash_seller_id(seller_id)
-        now = datetime.now()
-        
-        cursor.execute('''
-        INSERT INTO conversations (account_id, seller_hash, product_title, product_price, status, created_at, last_updated)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (self.account_id, seller_hash, product_title, product_price, 'active', now, now))
-        
-        conversation_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        return conversation_id
+        """Adiciona uma nova conversa ao banco de dados"""
+        try:
+            conversation = {
+                'account_id': self.account_id,
+                'seller_hash': self.hash_seller_id(seller_id),
+                'product_title': product_title,
+                'product_price': product_price,
+                'created_at': datetime.now(),
+                'last_message_at': datetime.now(),
+                'status': 'active'
+            }
+            result = self.db.conversations.insert_one(conversation)
+            logger.info(f"Conversa criada com sucesso para o produto: {product_title}")
+            return str(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Erro ao criar conversa: {e}")
+            return None
 
-    def add_message(self, conversation_id, sender, content):
-        """Adiciona uma nova mensagem"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        now = datetime.now()
-        cursor.execute('''
-        INSERT INTO messages (conversation_id, sender, content, timestamp)
-        VALUES (?, ?, ?, ?)
-        ''', (conversation_id, sender, content, now))
-        
-        # Atualiza o last_updated da conversa
-        cursor.execute('''
-        UPDATE conversations SET last_updated = ? WHERE id = ?
-        ''', (now, conversation_id))
-        
-        conn.commit()
-        conn.close()
+    def add_message(self, conversation_id, sender, message):
+        """Adiciona uma nova mensagem à conversa"""
+        try:
+            message_doc = {
+                'conversation_id': conversation_id,
+                'sender': sender,
+                'message': message,
+                'timestamp': datetime.now()
+            }
+            result = self.db.messages.insert_one(message_doc)
+            
+            # Atualiza o timestamp da última mensagem na conversa
+            self.db.conversations.update_one(
+                {'_id': conversation_id},
+                {'$set': {'last_message_at': datetime.now()}}
+            )
+            
+            logger.info(f"Mensagem adicionada com sucesso na conversa {conversation_id}")
+            return str(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Erro ao adicionar mensagem: {e}")
+            return None
 
     def get_conversation(self, conversation_id):
-        """Retorna uma conversa e suas mensagens (apenas para a conta específica)"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        # Verifica se a conversa pertence à conta
-        cursor.execute('''
-        SELECT * FROM conversations 
-        WHERE id = ? AND account_id = ?
-        ''', (conversation_id, self.account_id))
-        conversation = cursor.fetchone()
-        
-        if conversation:
-            cursor.execute('''
-            SELECT * FROM messages 
-            WHERE conversation_id = ? 
-            ORDER BY timestamp
-            ''', (conversation_id,))
-            messages = cursor.fetchall()
-            
-            return {
-                'conversation': conversation,
-                'messages': messages
-            }
-        
-        conn.close()
-        return None
+        """Obtém uma conversa específica"""
+        try:
+            conversation = self.db.conversations.find_one({'_id': conversation_id})
+            if conversation:
+                # Converte ObjectId para string
+                conversation['_id'] = str(conversation['_id'])
+                return conversation
+            return None
+        except Exception as e:
+            logger.error(f"Erro ao buscar conversa: {e}")
+            return None
 
     def get_active_conversations(self):
-        """Retorna todas as conversas ativas da conta específica"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-        SELECT * FROM conversations 
-        WHERE account_id = ? AND status = 'active' 
-        ORDER BY last_updated DESC
-        ''', (self.account_id,))
-        conversations = cursor.fetchall()
-        
-        conn.close()
-        return conversations
+        """Obtém todas as conversas ativas da conta"""
+        try:
+            conversations = list(self.db.conversations.find({
+                'account_id': self.account_id,
+                'status': 'active'
+            }))
+            
+            # Converte ObjectIds para strings
+            for conv in conversations:
+                conv['_id'] = str(conv['_id'])
+                
+            return conversations
+        except Exception as e:
+            logger.error(f"Erro ao buscar conversas ativas: {e}")
+            return []
 
-    def add_strategy(self, strategy_type, success_rate):
+    def add_strategy(self, strategy_name, success_rate):
         """Adiciona uma nova estratégia de negociação"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        now = datetime.now()
-        cursor.execute('''
-        INSERT INTO strategies (account_id, strategy_type, success_rate, created_at, last_used)
-        VALUES (?, ?, ?, ?, ?)
-        ''', (self.account_id, strategy_type, success_rate, now, now))
-        
-        conn.commit()
-        conn.close()
+        try:
+            strategy = {
+                'account_id': self.account_id,
+                'name': strategy_name,
+                'success_rate': success_rate,
+                'created_at': datetime.now(),
+                'last_used': datetime.now()
+            }
+            result = self.db.strategies.insert_one(strategy)
+            logger.info(f"Estratégia {strategy_name} adicionada com sucesso")
+            return str(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Erro ao adicionar estratégia: {e}")
+            return None
 
-    def get_successful_strategies(self, min_success_rate=0.7):
-        """Retorna estratégias bem-sucedidas de todas as contas"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-        SELECT strategy_type, AVG(success_rate) as avg_success_rate
-        FROM strategies
-        WHERE success_rate >= ?
-        GROUP BY strategy_type
-        ORDER BY avg_success_rate DESC
-        ''', (min_success_rate,))
-        
-        strategies = cursor.fetchall()
-        conn.close()
-        return strategies
-
-    def update_conversation_status(self, conversation_id, status):
-        """Atualiza o status de uma conversa"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-        UPDATE conversations 
-        SET status = ?, last_updated = ?
-        WHERE id = ? AND account_id = ?
-        ''', (status, datetime.now(), conversation_id, self.account_id))
-        
-        conn.commit()
-        conn.close() 
+    def get_successful_strategies(self):
+        """Obtém todas as estratégias bem-sucedidas da conta"""
+        try:
+            strategies = list(self.db.strategies.find({
+                'account_id': self.account_id,
+                'success_rate': {'$gte': 0.7}
+            }))
+            
+            # Converte ObjectIds para strings
+            for strat in strategies:
+                strat['_id'] = str(strat['_id'])
+                
+            return [(strat['name'], strat['success_rate']) for strat in strategies]
+        except Exception as e:
+            logger.error(f"Erro ao buscar estratégias: {e}")
+            return [] 

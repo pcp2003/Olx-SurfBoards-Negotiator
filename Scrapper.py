@@ -163,6 +163,7 @@ class OlxScraper:
                 continue
 
     def processar_mensagens(self):
+        
         """Processa mensagens em todas as conversas abertas"""
         for link, info in self.conversation_handles.items():
             try:
