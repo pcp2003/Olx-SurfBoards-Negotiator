@@ -14,7 +14,6 @@ import os
 import requests
 
 
-
 # Configuração do logging
 logging.basicConfig(
     level=getattr(logging, LOGGING["level"]),
@@ -156,35 +155,23 @@ class OlxScraper:
             try:
                 logger.info(f"Abrindo: {link}")
                 
-                # Verifica se já existe uma aba com este link
-                link_ja_aberto = False
-                for handle in self.driver.window_handles:
-                    self.driver.switch_to.window(handle)
-                    if link in self.driver.current_url:
-                        link_ja_aberto = True
-                        break
+                # Abre nova aba
+                self.driver.execute_script(f"window.open('{link}', '_blank');")
+                time.sleep(2)  # Espera a aba abrir
                 
-                if not link_ja_aberto:
-                    # Abre nova aba
-                    self.driver.execute_script(f"window.open('{link}', '_blank');")
-                    time.sleep(TIMEOUTS["retry_delay"])
-                    
-                    # Muda para a nova aba
-                    self.driver.switch_to.window(self.driver.window_handles[-1])
-                    
-                    # Espera a página carregar
-                    self.wait.until(
-                        EC.presence_of_element_located((By.TAG_NAME, "body"))
-                    )
-                    
-                    # Volta para a aba principal
-                    self.driver.switch_to.window(aba_principal)
-                else:
-                    logger.info(f"Link já está aberto em uma aba: {link}")
+                # Muda para a nova aba
+                self.driver.switch_to.window(self.driver.window_handles[-1])
+                
+                # Espera a página carregar
+                self.wait.until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                
+                # Volta para a aba principal
+                self.driver.switch_to.window(aba_principal)
                 
             except Exception as e:
                 logger.error(f"Erro ao abrir o link: {e}")
-                # Em caso de erro, tenta voltar para a aba principal
                 try:
                     self.driver.switch_to.window(aba_principal)
                 except:
@@ -203,38 +190,34 @@ class OlxScraper:
 
     # Novas alterações
 
-    def enviar_mensagem_para_api(self, anuncio_id, vendedor, mensagem):
+    def enviar_mensagem_para_api(self, anuncio_id, mensagem):
         """ Envia uma mensagem extraída pelo scraper para a API FastAPI """
         try:
-            payload = {
-                "anuncio_id": anuncio_id,
-                "vendedor": vendedor,
-                "mensagem": mensagem
-            }
-            
-            response = requests.post(f"{self.api_url}/enviar-mensagem/", json=payload)
+            response = requests.post(
+                f"{self.api_url}/receber-mensagem/{anuncio_id}",
+                params={"mensagem": mensagem}
+            )
             if response.status_code == 200:
-                logger.info(f"✅ Mensagem enviada para API: {mensagem}")
+                logger.info(f"Mensagem recebida registrada na API: {mensagem}")
             else:
-                logger.error(f"❌ Erro ao enviar mensagem para API: {response.text}")
+                logger.error(f"Erro ao registrar mensagem na API: {response.text}")
             return response.status_code == 200
         except Exception as e:
-            logger.error(f"Erro ao enviar mensagem para API: {e}")
+            logger.error(f"Erro ao registrar mensagem na API: {e}")
             return False
-        
-        
+
     def buscar_respostas_pendentes(self):
-        """ Busca mensagens pendentes de resposta na API """
+        """ Busca conversas com mensagens recebidas não respondidas na API """
         try:
-            response = requests.get(f"{self.api_url}/mensagens/pendentes")
+            response = requests.get(f"{self.api_url}/conversas/pendentes")
             if response.status_code == 200:
-                return response.json().get("mensagens_pendentes", [])
-            logger.error(f"Erro ao buscar mensagens pendentes: {response.text}")
+                return response.json().get("conversas_pendentes", [])
+            logger.error(f"Erro ao buscar conversas pendentes: {response.text}")
             return []
         except Exception as e:
-            logger.error(f"Erro ao buscar mensagens pendentes: {e}")
+            logger.error(f"Erro ao buscar conversas pendentes: {e}")
             return []
-    
+
     def enviar_mensagem_olx(self, anuncio_id, mensagem):
         """ Envia a mensagem de resposta no OLX """
         try:
@@ -249,45 +232,36 @@ class OlxScraper:
                 return False
 
             # Encontrar e preencher campo de mensagem
-            try:
-                campo_mensagem = self.wait.until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "textarea.css-1b0j9yn"))
-                )
-                
-                # Limpa o campo de mensagem
-                campo_mensagem.clear()
-                
-                # Envia a mensagem caractere por caractere para simular digitação humana
-                for char in mensagem:
-                    campo_mensagem.send_keys(char)
-                    time.sleep(0.1)
-                
-                time.sleep(1)
-                
-                # Tenta enviar a mensagem
-                campo_mensagem.send_keys(Keys.RETURN)
-                
-                # Espera um pouco para garantir que a mensagem foi enviada
-                time.sleep(2)
-                
-                logger.info(f"✅ Mensagem enviada no OLX: {mensagem}")
-                
-                # Atualizar API informando que a mensagem foi enviada
-                response = requests.put(
-                    f"{self.api_url}/atualizar-mensagem/{anuncio_id}",
-                    params={"mensagem_recebida": mensagem}
-                )
-                if response.status_code != 200:
-                    logger.error(f"Erro ao atualizar API: {response.text}")
+            campo_mensagem = self.wait.until(
+                EC.presence_of_element_located((By.NAME, "message.text"))  # Usando NAME correto
+            )
 
-                return True
-                
-            except Exception as e:
-                logger.error(f"Erro ao enviar mensagem: {e}")
-                return False
+            # Enviar a mensagem
+            campo_mensagem.clear()
+            campo_mensagem.send_keys(mensagem)
+            campo_mensagem.send_keys(Keys.RETURN)
+            
+            logger.info(f" Mensagem enviada no OLX: {mensagem}")
+            return True
 
         except Exception as e:
-            logger.error(f"❌ Erro ao enviar mensagem no OLX: {e}")
+            logger.error(f"Erro ao enviar mensagem no OLX: {e}")
+            return False
+
+
+    def verificar_mensagem_existe(self, anuncio_id, mensagem):
+        """ Verifica se uma mensagem já existe na DB """
+        try:
+            response = requests.get(
+                f"{self.api_url}/mensagem-existe/{anuncio_id}",
+                params={"mensagem": mensagem}
+            )
+            if response.status_code == 200:
+                return response.json().get("existe", False)
+            logger.error(f"Erro ao verificar mensagem na API: {response.text}")
+            return False
+        except Exception as e:
+            logger.error(f"Erro ao verificar mensagem na API: {e}")
             return False
 
     def extrair_mensagens_vendedor(self):
@@ -301,66 +275,33 @@ class OlxScraper:
                     
                     # Extrair informações do anúncio
                     anuncio_id = self.driver.current_url.split("/")[-1].split("?")[0]
+
+                    logger.info(f"Anúncio ID: {anuncio_id}")
+
+                    # Esperar até que o elemento esteja presente na página
+                    self.wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="messages-list-container"]')))
+
+                    # Busca todas as mensagens sem esperar
+                    mensagens = self.driver.find_elements(By.CSS_SELECTOR, '[data-testid="received-message"] [data-testid="message"] span')
                     
-                    # Primeiro verifica se existem mensagens
-                    try:
-                        # Espera o container de mensagens carregar
-                        container_mensagens = self.wait.until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "div.css-1q0g1mp"))
-                        )
-                        
-                        # Busca todas as mensagens
-                        mensagens = container_mensagens.find_elements(By.CSS_SELECTOR, "div.css-1q0g1mp")
-                        
-                        if not mensagens:
-                            logger.info(f"Nenhuma mensagem encontrada para o anúncio {anuncio_id}")
-                            continue
-                            
-                        # Se existem mensagens, tenta extrair o nome do vendedor
-                        vendedor = "Vendedor Desconhecido"
+                    if not mensagens:
+                        logger.info(f"Nenhuma mensagem encontrada para o anúncio")
+                        continue
+                    
+                    # Processa cada mensagem
+                    for msg in mensagens:
                         try:
-                            # Tenta primeiro o seletor do nome do vendedor no cabeçalho do chat
-                            vendedor_element = self.wait.until(
-                                EC.presence_of_element_located((By.CSS_SELECTOR, "div.css-1q0g1mp h2.css-1q0g1mp"))
-                            )
-                            vendedor = vendedor_element.text.strip()
-                            logger.info(f"Nome do vendedor encontrado: {vendedor}")
-                        except Exception as e1:
-                            logger.warning(f"Tentativa 1 de encontrar vendedor falhou: {e1}")
-                            try:
-                                # Tenta encontrar pelo nome na lista de mensagens
-                                vendedor_element = self.wait.until(
-                                    EC.presence_of_element_located((By.CSS_SELECTOR, "div.css-1q0g1mp span.css-1q0g1mp"))
-                                )
-                                vendedor = vendedor_element.text.strip()
-                                logger.info(f"Nome do vendedor encontrado (tentativa 2): {vendedor}")
-                            except Exception as e2:
-                                logger.warning(f"Tentativa 2 de encontrar vendedor falhou: {e2}")
-                                try:
-                                    # Tenta encontrar pelo atributo data-testid
-                                    vendedor_element = self.wait.until(
-                                        EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='chat-header-name']"))
-                                    )
-                                    vendedor = vendedor_element.text.strip()
-                                    logger.info(f"Nome do vendedor encontrado (tentativa 3): {vendedor}")
-                                except Exception as e3:
-                                    logger.warning(f"Tentativa 3 de encontrar vendedor falhou: {e3}")
-                        
-                        # Processa as mensagens encontradas
-                        for msg in mensagens:
-                            try:
-                                # Verifica se é uma mensagem do vendedor (não do comprador)
-                                # As mensagens do vendedor geralmente têm uma classe específica ou estão em um container diferente
-                                classes = msg.get_attribute("class")
-                                if "css-1q0g1mp" in classes and "css-1q0g1mp" not in msg.find_element(By.XPATH, "./..").get_attribute("class"):
-                                    texto = msg.text.strip()
-                                    if texto and not self.enviar_mensagem_para_api(anuncio_id, vendedor, texto):
-                                        logger.warning(f"Não foi possível registrar mensagem para anúncio {anuncio_id}")
-                            except Exception as e:
-                                logger.error(f"Erro ao processar mensagem: {e}")
-                                
-                    except Exception as e:
-                        logger.warning(f"Não foi possível encontrar mensagens: {e}")
+                            texto = msg.text.strip()
+                            if texto:
+                                logger.info(f"Mensagem encontrada: {texto}")
+                                # Verifica se a mensagem já existe antes de enviar
+                                if not self.verificar_mensagem_existe(anuncio_id, texto):
+                                    logger.info(f"Enviando nova mensagem para API: {texto}")
+                                    self.enviar_mensagem_para_api(anuncio_id, texto)
+                                else:
+                                    logger.info(f"Mensagem já existe na DB: {texto}")
+                        except Exception as e:
+                            logger.error(f"Erro ao processar mensagem: {e}")
                             
                 except Exception as e:
                     logger.error(f"Erro ao processar aba: {e}")
@@ -378,18 +319,19 @@ class OlxScraper:
     def ciclo_de_respostas(self):
         """ Loop infinito para buscar mensagens e mostrar as pendentes """
         while True:
-            logger.info("🔄 Verificando mensagens pendentes...")
-            mensagens_pendentes = self.buscar_respostas_pendentes()
+            logger.info("🔄 Verificando conversas pendentes...")
+            conversas_pendentes = self.buscar_respostas_pendentes()
 
-            if mensagens_pendentes:
+            if conversas_pendentes:
                 print("\n" + "="*50)
-                print("📬 MENSAGENS PENDENTES RECEBIDAS:")
+                print("📬 CONVERSAS PENDENTES:")
                 print("="*50)
                 
-                for msg in mensagens_pendentes:
-                    print(f"\n📝 Anúncio ID: {msg['anuncio_id']}")
-                    print(f"👤 Vendedor: {msg['vendedor']}")
-                    print(f"💬 Mensagem: {msg['mensagem']}")
+                for conversa in conversas_pendentes:
+                    print(f"\n📝 Anúncio ID: {conversa['anuncio_id']}")
+                    for msg in conversa['mensagens']:
+                        if msg['tipo'] == 'recebida' and not msg['respondida']:
+                            print(f"💬 Mensagem: {msg['mensagem']}")
                     print("-"*30)
                 
                 print("\n" + "="*50)
@@ -398,11 +340,13 @@ class OlxScraper:
                 
                 # TODO: Aqui será integrado o Langflow para gerar respostas
                 # Exemplo de como será:
-                # for msg in mensagens_pendentes:
-                #     resposta = langflow.gerar_resposta(msg)
-                #     self.enviar_mensagem_olx(msg['anuncio_id'], resposta)
+                # for conversa in conversas_pendentes:
+                #     for msg in conversa['mensagens']:
+                #         if msg['tipo'] == 'recebida' and not msg['respondida']:
+                #             resposta = langflow.gerar_resposta(msg['mensagem'])
+                #             self.enviar_mensagem_olx(conversa['anuncio_id'], resposta)
             else:
-                logger.info("⏳ Nenhuma nova mensagem pendente.")
+                logger.info("⏳ Nenhuma conversa pendente.")
 
             time.sleep(10)  # Espera 10 segundos antes de checar novamente
 
