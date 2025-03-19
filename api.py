@@ -183,8 +183,8 @@ def enviar_mensagem(anuncio_id: str, mensagem_data: MensagemRequest):
         raise HTTPException(status_code=500, detail="Erro interno ao enviar mensagem")
 
 @app.post("/receber-mensagem/{anuncio_id}")
-def receber_mensagem(anuncio_id: str, mensagem_data: MensagemRequest):
-    """Registra uma mensagem recebida e marca todas as mensagens enviadas como respondidas"""
+def receber_mensagem(anuncio_id: str, mensagem_data: MensagemRequest, tipo: str):
+    """Registra uma mensagem recebida ou enviada"""
     try:
         with get_db() as conn:
             conn.execute(
@@ -199,26 +199,39 @@ def receber_mensagem(anuncio_id: str, mensagem_data: MensagemRequest):
             if not conversa:
                 raise HTTPException(status_code=400, detail="Erro ao criar conversa")
 
-            conn.execute(
-                """
-                UPDATE mensagens
-                SET respondida = TRUE
-                WHERE conversa_id = ?
-                AND tipo = 'enviada'
-                """,
-                (conversa["id"],),
-            )
+            # Se a mensagem for recebida, marca todas as enviadas como respondidas
+            if tipo == 'recebida':
+                conn.execute(
+                    """
+                    UPDATE mensagens
+                    SET respondida = TRUE
+                    WHERE conversa_id = ?
+                    AND tipo = 'enviada'
+                    """,
+                    (conversa["id"],),
+                )
+            # Se a mensagem for enviada, marca todas as recebidas como respondidas
+            elif tipo == 'enviada':
+                conn.execute(
+                    """
+                    UPDATE mensagens
+                    SET respondida = TRUE
+                    WHERE conversa_id = ?
+                    AND tipo = 'recebida'
+                    """,
+                    (conversa["id"],),
+                )
 
             conn.execute(
                 """
                 INSERT INTO mensagens (conversa_id, tipo, mensagem, respondida)
-                VALUES (?, 'recebida', ?, FALSE)
+                VALUES (?, ?, ?, FALSE)
                 """,
-                (conversa["id"], mensagem_data.mensagem),
+                (conversa["id"], tipo, mensagem_data.mensagem),
             )
 
             conn.commit()
-            return {"status": "Mensagem recebida e mensagens enviadas marcadas como respondidas"}
+            return {"status": f"Mensagem {tipo} registrada com sucesso"}
     except Exception as e:
         logger.error(f"Erro ao receber mensagem na DB: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao receber mensagem")

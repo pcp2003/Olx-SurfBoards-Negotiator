@@ -190,6 +190,8 @@ class OlxScraper:
 
     # Novas alterações
 
+    
+
     def verificar_mensagem_existe(self, anuncio_id, mensagem):
         """ Verifica se uma mensagem já existe na DB antes de enviá-la para a API """
         try:
@@ -205,7 +207,7 @@ class OlxScraper:
             logger.error(f"Erro ao verificar mensagem na API: {e}")
             return False
 
-    def enviar_mensagem_para_api(self, anuncio_id, mensagem):
+    def enviar_mensagem_para_api(self, anuncio_id, mensagem, tipo):
         """ Envia uma mensagem extraída pelo scraper para a API FastAPI """
         try:
             payload = {
@@ -213,10 +215,11 @@ class OlxScraper:
             }
             response = requests.post(
                 f"{self.api_url}/receber-mensagem/{anuncio_id}",
-                json=payload
+                json=payload,
+                params={"tipo": tipo}
             )
             if response.status_code == 200:
-                logger.info(f"Mensagem recebida registrada na API: {mensagem}")
+                logger.info(f"Mensagem {tipo} registrada na API: {mensagem}")
             else:
                 logger.error(f"Erro ao registrar mensagem na API: {response.text}")
             return response.status_code == 200
@@ -282,26 +285,63 @@ class OlxScraper:
                     # Esperar até que o elemento das mensagens esteja presente
                     self.wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="messages-list-container"]')))
 
-                    mensagens = self.driver.find_elements(By.CSS_SELECTOR, '[data-testid="received-message"] [data-testid="message"] span')
+                    # Buscar todas as mensagens (recebidas e enviadas)
+                    mensagens_recebidas = self.driver.find_elements(By.CSS_SELECTOR, '[data-testid="received-message"] [data-testid="message"] span')
+                    mensagens_enviadas = self.driver.find_elements(By.CSS_SELECTOR, '[data-testid="sent-message"] [data-testid="message"] span')
                     
-                    if not mensagens:
+                    if not mensagens_recebidas and not mensagens_enviadas:
                         logger.info(f"Nenhuma mensagem encontrada para o anúncio {anuncio_id}")
                         continue
+
+                    # Criar lista de todas as mensagens com seus tipos
+                    todas_mensagens = []
                     
-                    for msg in mensagens:
+                    # Adicionar mensagens recebidas
+                    for msg in mensagens_recebidas:
                         try:
                             texto = msg.text.strip()
                             if texto:
-                                logger.info(f"Mensagem encontrada: {texto}")
-                                
-                                # ✅ Agora verifica se a mensagem já existe antes de enviar
-                                if not self.verificar_mensagem_existe(anuncio_id, texto):
-                                    logger.info(f"Enviando nova mensagem para API: {texto}")
-                                    self.enviar_mensagem_para_api(anuncio_id, texto)
-                                else:
-                                    logger.info(f"Mensagem já registrada na API: {texto}")
+                                todas_mensagens.append({
+                                    'texto': texto,
+                                    'tipo': 'recebida',
+                                    'elemento': msg
+                                })
+                        except Exception as e:
+                            logger.error(f"Erro ao processar mensagem recebida: {e}")
+
+                    # Adicionar mensagens enviadas
+                    for msg in mensagens_enviadas:
+                        try:
+                            texto = msg.text.strip()
+                            if texto:
+                                todas_mensagens.append({
+                                    'texto': texto,
+                                    'tipo': 'enviada',
+                                    'elemento': msg
+                                })
+                        except Exception as e:
+                            logger.error(f"Erro ao processar mensagem enviada: {e}")
+
+                    # Ordenar mensagens por posição no DOM (ordem de recebimento)
+                    todas_mensagens.sort(key=lambda x: self.driver.execute_script(
+                        "return arguments[0].getBoundingClientRect().top;", 
+                        x['elemento']
+                    ))
+
+                    # Enviar todas as mensagens para a API
+                    for msg in todas_mensagens:
+                        try:
+                            texto = msg['texto']
+                            tipo = msg['tipo']
+                            
+                            # Verificar se a mensagem já existe antes de enviar
+                            if not self.verificar_mensagem_existe(anuncio_id, texto):
+                                self.enviar_mensagem_para_api(anuncio_id, texto, tipo)
+                            else:
+                                logger.info(f"Mensagem já registrada na API: {texto}")
                         except Exception as e:
                             logger.error(f"Erro ao processar mensagem: {e}")
+
                 except Exception as e:
                     logger.error(f"Erro ao processar aba: {e}")
                     continue
