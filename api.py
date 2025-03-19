@@ -237,7 +237,7 @@ def receber_mensagem(anuncio_id: str, mensagem_data: MensagemRequest, tipo: str)
         raise HTTPException(status_code=500, detail="Erro interno ao receber mensagem")
 
 @app.get("/mensagem-existe/{anuncio_id}")
-def verificar_mensagem_existe(anuncio_id: str, mensagem: str):
+def verificar_mensagem_existe(anuncio_id: str, mensagem: str, tipo: str):
     """Verifica se uma mensagem já existe na DB para um anúncio específico"""
     try:
         with get_db() as conn:
@@ -254,8 +254,8 @@ def verificar_mensagem_existe(anuncio_id: str, mensagem: str):
                 SELECT COUNT(*) FROM mensagens 
                 WHERE conversa_id = ? 
                 AND mensagem = ?
-                AND tipo = 'recebida'
-            """, (conversa["id"], mensagem)).fetchone()[0] > 0
+                AND tipo = ?
+            """, (conversa["id"], mensagem, tipo)).fetchone()[0] > 0
             
             logger.info(f"Verificação de mensagem para anuncio_id {anuncio_id}: {'existe' if mensagem_existe else 'não existe'}")
             return {"existe": mensagem_existe}

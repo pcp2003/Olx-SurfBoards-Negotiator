@@ -192,12 +192,15 @@ class OlxScraper:
 
     
 
-    def verificar_mensagem_existe(self, anuncio_id, mensagem):
+    def verificar_mensagem_existe(self, anuncio_id, mensagem, tipo):
         """ Verifica se uma mensagem já existe na DB antes de enviá-la para a API """
         try:
             response = requests.get(
                 f"{self.api_url}/mensagem-existe/{anuncio_id}",
-                params={"mensagem": mensagem}  # Passando a mensagem como query param
+                params={
+                    "mensagem": mensagem,
+                    "tipo": tipo
+                }
             )
             if response.status_code == 200:
                 return response.json().get("existe", False)
@@ -335,7 +338,7 @@ class OlxScraper:
                             tipo = msg['tipo']
                             
                             # Verificar se a mensagem já existe antes de enviar
-                            if not self.verificar_mensagem_existe(anuncio_id, texto):
+                            if not self.verificar_mensagem_existe(anuncio_id, texto, tipo):
                                 self.enviar_mensagem_para_api(anuncio_id, texto, tipo)
                             else:
                                 logger.info(f"Mensagem já registrada na API: {texto}")
