@@ -190,12 +190,30 @@ class OlxScraper:
 
     # Novas alterações
 
+    def verificar_mensagem_existe(self, anuncio_id, mensagem):
+        """ Verifica se uma mensagem já existe na DB antes de enviá-la para a API """
+        try:
+            response = requests.get(
+                f"{self.api_url}/mensagem-existe/{anuncio_id}",
+                params={"mensagem": mensagem}  # Passando a mensagem como query param
+            )
+            if response.status_code == 200:
+                return response.json().get("existe", False)
+            logger.error(f"Erro ao verificar mensagem na API: {response.text}")
+            return False
+        except Exception as e:
+            logger.error(f"Erro ao verificar mensagem na API: {e}")
+            return False
+
     def enviar_mensagem_para_api(self, anuncio_id, mensagem):
         """ Envia uma mensagem extraída pelo scraper para a API FastAPI """
         try:
+            payload = {
+                "mensagem": mensagem
+            }
             response = requests.post(
                 f"{self.api_url}/receber-mensagem/{anuncio_id}",
-                params={"mensagem": mensagem}
+                json=payload
             )
             if response.status_code == 200:
                 logger.info(f"Mensagem recebida registrada na API: {mensagem}")
@@ -249,21 +267,6 @@ class OlxScraper:
             return False
 
 
-    def verificar_mensagem_existe(self, anuncio_id, mensagem):
-        """ Verifica se uma mensagem já existe na DB """
-        try:
-            response = requests.get(
-                f"{self.api_url}/mensagem-existe/{anuncio_id}",
-                params={"mensagem": mensagem}
-            )
-            if response.status_code == 200:
-                return response.json().get("existe", False)
-            logger.error(f"Erro ao verificar mensagem na API: {response.text}")
-            return False
-        except Exception as e:
-            logger.error(f"Erro ao verificar mensagem na API: {e}")
-            return False
-
     def extrair_mensagens_vendedor(self):
         """ Extrai mensagens de vendedores e envia para a API """
         try:
@@ -273,41 +276,36 @@ class OlxScraper:
                     self.driver.switch_to.window(aba)
                     time.sleep(2)  # Pequena pausa para garantir carregamento
                     
-                    # Extrair informações do anúncio
                     anuncio_id = self.driver.current_url.split("/")[-1].split("?")[0]
+                    logger.info(f"Analisando Anúncio ID: {anuncio_id}")
 
-                    logger.info(f"Anúncio ID: {anuncio_id}")
-
-                    # Esperar até que o elemento esteja presente na página
+                    # Esperar até que o elemento das mensagens esteja presente
                     self.wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="messages-list-container"]')))
 
-                    # Busca todas as mensagens sem esperar
                     mensagens = self.driver.find_elements(By.CSS_SELECTOR, '[data-testid="received-message"] [data-testid="message"] span')
                     
                     if not mensagens:
-                        logger.info(f"Nenhuma mensagem encontrada para o anúncio")
+                        logger.info(f"Nenhuma mensagem encontrada para o anúncio {anuncio_id}")
                         continue
                     
-                    # Processa cada mensagem
                     for msg in mensagens:
                         try:
                             texto = msg.text.strip()
                             if texto:
                                 logger.info(f"Mensagem encontrada: {texto}")
-                                # Verifica se a mensagem já existe antes de enviar
+                                
+                                # ✅ Agora verifica se a mensagem já existe antes de enviar
                                 if not self.verificar_mensagem_existe(anuncio_id, texto):
                                     logger.info(f"Enviando nova mensagem para API: {texto}")
                                     self.enviar_mensagem_para_api(anuncio_id, texto)
                                 else:
-                                    logger.info(f"Mensagem já existe na DB: {texto}")
+                                    logger.info(f"Mensagem já registrada na API: {texto}")
                         except Exception as e:
                             logger.error(f"Erro ao processar mensagem: {e}")
-                            
                 except Exception as e:
                     logger.error(f"Erro ao processar aba: {e}")
                     continue
                     
-            # Volta para a aba principal
             try:
                 self.driver.switch_to.window(abas[0])
             except:
@@ -315,6 +313,7 @@ class OlxScraper:
             
         except Exception as e:
             logger.error(f"Erro ao buscar mensagens novas: {e}")
+
 
     def ciclo_de_respostas(self):
         """ Loop infinito para buscar mensagens e mostrar as pendentes """

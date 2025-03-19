@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 import sqlite3
 from pydantic import BaseModel
 from typing import List
@@ -6,21 +6,24 @@ import os
 from dotenv import load_dotenv
 import logging
 from datetime import datetime
+import uvicorn
 
 # Configuração do logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('api.log'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("api.log"), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
 
+# Carregar variáveis de ambiente
 load_dotenv()
 app = FastAPI()
 OLX_EMAIL = os.getenv("OLX_USERNAME")
+
+# Definição de modelos Pydantic para validação de dados
+class MensagemRequest(BaseModel):
+    mensagem: str
 
 class Mensagem(BaseModel):
     id: int
@@ -35,18 +38,28 @@ class Conversa(BaseModel):
     anuncio_id: str
     mensagens: List[Mensagem]
 
+# Função para conectar ao banco de dados
 def get_db():
-    """Retorna uma conexão com o banco de dados"""
     try:
-        return sqlite3.connect("mensagens.db")
+        conn = sqlite3.connect("mensagens.db")
+        conn.row_factory = sqlite3.Row  # Permite acessar resultados por nome de coluna
+        return conn
     except Exception as e:
         logger.error(f"Erro ao conectar ao banco de dados: {e}")
         raise
 
+# Criar tabelas no banco de dados
 def criar_tabelas():
     """Cria as tabelas no banco de dados"""
     try:
+        logger.info("Iniciando criação/verificação das tabelas...")
         with get_db() as conn:
+            # Verifica se o banco existe
+            if not os.path.exists("mensagens.db"):
+                logger.info("Banco de dados não encontrado, criando novo...")
+            
+            # Cria tabela de conversas
+            logger.info("Criando/verificando tabela de conversas...")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS conversas (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,6 +68,9 @@ def criar_tabelas():
                     UNIQUE(email, anuncio_id)
                 )
             """)
+            
+            # Cria tabela de mensagens
+            logger.info("Criando/verificando tabela de mensagens...")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS mensagens (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,11 +81,21 @@ def criar_tabelas():
                     FOREIGN KEY (conversa_id) REFERENCES conversas (id)
                 )
             """)
+            
+            conn.commit()
             logger.info("Tabelas criadas/verificadas com sucesso")
+            
+            # Verifica se as tabelas foram criadas
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = cursor.fetchall()
+            logger.info(f"Tabelas existentes no banco: {[table[0] for table in tables]}")
+            
     except Exception as e:
         logger.error(f"Erro ao criar tabelas: {e}")
         raise
 
+# Criar tabelas ao iniciar a API
 criar_tabelas()
 
 @app.get("/conversas/pendentes")
@@ -77,34 +103,37 @@ def buscar_conversas_pendentes():
     """Retorna conversas com mensagens recebidas não respondidas"""
     try:
         with get_db() as conn:
-            # Busca conversas com mensagens recebidas não respondidas
-            conversas = conn.execute("""
+            conversas = conn.execute(
+                """
                 SELECT c.id, c.email, c.anuncio_id, m.id, m.tipo, m.mensagem, m.respondida
                 FROM conversas c
                 JOIN mensagens m ON c.id = m.conversa_id
-                WHERE c.email = ? 
-                AND m.tipo = 'recebida' 
+                WHERE c.email = ?
+                AND m.tipo = 'recebida'
                 AND m.respondida = FALSE
                 ORDER BY c.id, m.id
-            """, (OLX_EMAIL,)).fetchall()
+                """,
+                (OLX_EMAIL,),
+            ).fetchall()
 
-            # Agrupa mensagens por conversa
             resultado = {}
             for conv in conversas:
-                if conv[0] not in resultado:
-                    resultado[conv[0]] = {
-                        "id": conv[0],
-                        "email": conv[1],
-                        "anuncio_id": conv[2],
-                        "mensagens": []
+                if conv["id"] not in resultado:
+                    resultado[conv["id"]] = {
+                        "id": conv["id"],
+                        "email": conv["email"],
+                        "anuncio_id": conv["anuncio_id"],
+                        "mensagens": [],
                     }
-                resultado[conv[0]]["mensagens"].append({
-                    "id": conv[3],
-                    "conversa_id": conv[0],
-                    "tipo": conv[4],
-                    "mensagem": conv[5],
-                    "respondida": bool(conv[6])
-                })
+                resultado[conv["id"]]["mensagens"].append(
+                    {
+                        "id": conv["id"],
+                        "conversa_id": conv["id"],
+                        "tipo": conv["tipo"],
+                        "mensagem": conv["mensagem"],
+                        "respondida": bool(conv["respondida"]),
+                    }
+                )
 
             logger.info(f"Buscadas {len(resultado)} conversas pendentes na DB")
             return {"conversas_pendentes": list(resultado.values())}
@@ -112,104 +141,87 @@ def buscar_conversas_pendentes():
         logger.error(f"Erro ao buscar conversas pendentes na DB: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao buscar conversas")
 
-@app.post("/enviar-mensagem/")
-def enviar_mensagem(anuncio_id: str, mensagem: str):
+@app.post("/enviar-mensagem/{anuncio_id}")
+def enviar_mensagem(anuncio_id: str, mensagem_data: MensagemRequest):
     """Registra uma mensagem enviada e marca todas as mensagens recebidas anteriores como respondidas"""
     try:
         with get_db() as conn:
-            # Cria ou obtém conversa
-            conn.execute("INSERT OR IGNORE INTO conversas (email, anuncio_id) VALUES (?, ?)", 
-                        (OLX_EMAIL, anuncio_id))
-            conversa = conn.execute("SELECT id FROM conversas WHERE email = ? AND anuncio_id = ?", 
-                                  (OLX_EMAIL, anuncio_id)).fetchone()
-            
+            conn.execute(
+                "INSERT OR IGNORE INTO conversas (email, anuncio_id) VALUES (?, ?)",
+                (OLX_EMAIL, anuncio_id),
+            )
+            conversa = conn.execute(
+                "SELECT id FROM conversas WHERE email = ? AND anuncio_id = ?",
+                (OLX_EMAIL, anuncio_id),
+            ).fetchone()
+
             if not conversa:
-                logger.error(f"Erro ao criar conversa para anuncio_id: {anuncio_id} na DB")
                 raise HTTPException(status_code=400, detail="Erro ao criar conversa")
-            
-            # Marca todas as mensagens recebidas anteriores como respondidas
-            conn.execute("""
-                UPDATE mensagens 
+
+            conn.execute(
+                """
+                UPDATE mensagens
                 SET respondida = TRUE
-                WHERE conversa_id = ? 
+                WHERE conversa_id = ?
                 AND tipo = 'recebida'
-            """, (conversa[0],))
-            
-            # Insere nova mensagem enviada
-            conn.execute("""
-                INSERT INTO mensagens (conversa_id, tipo, mensagem, respondida) 
+                """,
+                (conversa["id"],),
+            )
+
+            conn.execute(
+                """
+                INSERT INTO mensagens (conversa_id, tipo, mensagem, respondida)
                 VALUES (?, 'enviada', ?, FALSE)
-            """, (conversa[0], mensagem))
-            
-            conn.commit()  # Adiciona commit explícito
-            
-            logger.info(f"Mensagem enviada com sucesso na DB para anuncio_id: {anuncio_id}")
+                """,
+                (conversa["id"], mensagem_data.mensagem),
+            )
+
+            conn.commit()
             return {"status": "Mensagem enviada e mensagens anteriores marcadas como respondidas"}
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Erro ao enviar mensagem na DB: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro interno ao enviar mensagem: {str(e)}")
+        raise HTTPException(status_code=500, detail="Erro interno ao enviar mensagem")
 
 @app.post("/receber-mensagem/{anuncio_id}")
-def receber_mensagem(anuncio_id: str, mensagem: str):
+def receber_mensagem(anuncio_id: str, mensagem_data: MensagemRequest):
     """Registra uma mensagem recebida e marca todas as mensagens enviadas como respondidas"""
     try:
         with get_db() as conn:
-            # Cria ou obtém conversa
-            conn.execute("INSERT OR IGNORE INTO conversas (email, anuncio_id) VALUES (?, ?)", 
-                        (OLX_EMAIL, anuncio_id))
-            conversa = conn.execute("SELECT id FROM conversas WHERE email = ? AND anuncio_id = ?", 
-                                  (OLX_EMAIL, anuncio_id)).fetchone()
-            
+            conn.execute(
+                "INSERT OR IGNORE INTO conversas (email, anuncio_id) VALUES (?, ?)",
+                (OLX_EMAIL, anuncio_id),
+            )
+            conversa = conn.execute(
+                "SELECT id FROM conversas WHERE email = ? AND anuncio_id = ?",
+                (OLX_EMAIL, anuncio_id),
+            ).fetchone()
+
             if not conversa:
-                logger.error(f"Erro ao criar conversa para anuncio_id: {anuncio_id} na DB")
                 raise HTTPException(status_code=400, detail="Erro ao criar conversa")
-            
-            # Marca todas as mensagens enviadas como respondidas
-            conn.execute("""
-                UPDATE mensagens 
+
+            conn.execute(
+                """
+                UPDATE mensagens
                 SET respondida = TRUE
-                WHERE conversa_id = ? 
+                WHERE conversa_id = ?
                 AND tipo = 'enviada'
-            """, (conversa[0],))
-            
-            # Insere nova mensagem recebida
-            conn.execute("""
-                INSERT INTO mensagens (conversa_id, tipo, mensagem, respondida) 
+                """,
+                (conversa["id"],),
+            )
+
+            conn.execute(
+                """
+                INSERT INTO mensagens (conversa_id, tipo, mensagem, respondida)
                 VALUES (?, 'recebida', ?, FALSE)
-            """, (conversa[0], mensagem))
-            
-            logger.info(f"Mensagem recebida com sucesso na DB para anuncio_id: {anuncio_id}")
+                """,
+                (conversa["id"], mensagem_data.mensagem),
+            )
+
+            conn.commit()
             return {"status": "Mensagem recebida e mensagens enviadas marcadas como respondidas"}
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Erro ao receber mensagem na DB: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao receber mensagem")
-
-@app.delete("/conversa/{anuncio_id}")
-def remover_conversa(anuncio_id: str):
-    """Remove uma conversa e suas mensagens"""
-    try:
-        with get_db() as conn:
-            conversa = conn.execute("SELECT id FROM conversas WHERE email = ? AND anuncio_id = ?", 
-                                  (OLX_EMAIL, anuncio_id)).fetchone()
-            
-            if not conversa:
-                logger.error(f"Conversa não encontrada na DB para remoção: {anuncio_id}")
-                raise HTTPException(status_code=404, detail="Conversa não encontrada")
-            
-            conn.execute("DELETE FROM mensagens WHERE conversa_id = ?", (conversa[0],))
-            conn.execute("DELETE FROM conversas WHERE id = ?", (conversa[0],))
-            
-            logger.info(f"Conversa removida com sucesso na DB: {anuncio_id}")
-            return {"status": "Conversa removida com sucesso"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Erro ao remover conversa na DB: {e}")
-        raise HTTPException(status_code=500, detail="Erro interno ao remover conversa")
 
 @app.get("/mensagem-existe/{anuncio_id}")
 def verificar_mensagem_existe(anuncio_id: str, mensagem: str):
@@ -230,15 +242,14 @@ def verificar_mensagem_existe(anuncio_id: str, mensagem: str):
                 WHERE conversa_id = ? 
                 AND mensagem = ?
                 AND tipo = 'recebida'
-            """, (conversa[0], mensagem)).fetchone()[0] > 0
+            """, (conversa["id"], mensagem)).fetchone()[0] > 0
             
             logger.info(f"Verificação de mensagem para anuncio_id {anuncio_id}: {'existe' if mensagem_existe else 'não existe'}")
             return {"existe": mensagem_existe}
     except Exception as e:
         logger.error(f"Erro ao verificar mensagem na DB: {e}")
-        raise HTTPException(status_code=500, detail="Erro interno ao verificar mensagem")
+        raise HTTPException(status_code=500, detail=f"Erro interno ao verificar mensagem: {str(e)}")
 
 if __name__ == "__main__":
-    import uvicorn
     logger.info("Iniciando servidor FastAPI")
     uvicorn.run(app, host="localhost", port=8000)
