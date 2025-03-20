@@ -196,7 +196,7 @@ class OlxScraper:
         """ Verifica se uma mensagem já existe na DB antes de enviá-la para a API """
         try:
             response = requests.get(
-                f"{self.api_url}/mensagem-existe/{anuncio_id}",
+                f"{self.api_url}/mensagem-existe/{CREDENTIALS['username']}/{anuncio_id}",
                 params={
                     "mensagem": mensagem,
                     "tipo": tipo
@@ -217,7 +217,7 @@ class OlxScraper:
                 "mensagem": mensagem
             }
             response = requests.post(
-                f"{self.api_url}/receber-mensagem/{anuncio_id}",
+                f"{self.api_url}/receber-mensagem/{CREDENTIALS['username']}/{anuncio_id}",
                 json=payload,
                 params={"tipo": tipo}
             )
@@ -233,7 +233,7 @@ class OlxScraper:
     def buscar_respostas_pendentes(self):
         """ Busca conversas com mensagens recebidas não respondidas na API """
         try:
-            response = requests.get(f"{self.api_url}/conversas/pendentes")
+            response = requests.get(f"{self.api_url}/conversas/pendentes/{CREDENTIALS['username']}")
             if response.status_code == 200:
                 return response.json().get("conversas_pendentes", [])
             logger.error(f"Erro ao buscar conversas pendentes: {response.text}")
@@ -390,7 +390,13 @@ class OlxScraper:
             else:
                 logger.info("⏳ Nenhuma conversa pendente.")
 
-            time.sleep(10)  # Espera 10 segundos antes de checar novamente
+            # Verifica novas mensagens dos vendedores a cada 5 minutos
+            logger.info("🔄 Verificando novas mensagens dos vendedores...")
+            self.extrair_mensagens_vendedor()
+            
+            # Aguarda 5 minutos antes da próxima verificação
+            logger.info("⏳ Aguardando 5 minutos para próxima verificação...")
+            time.sleep(300)  # 5 minutos = 300 segundos
 
 
     def executar(self):

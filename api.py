@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 # Carregar variáveis de ambiente
 load_dotenv()
 app = FastAPI()
-OLX_EMAIL = os.getenv("OLX_USERNAME")
 
 # Definição de modelos Pydantic para validação de dados
 class MensagemRequest(BaseModel):
@@ -98,8 +97,8 @@ def criar_tabelas():
 # Criar tabelas ao iniciar a API
 criar_tabelas()
 
-@app.get("/conversas/pendentes")
-def buscar_conversas_pendentes():
+@app.get("/conversas/pendentes/{email}")
+def buscar_conversas_pendentes(email: str):
     """Retorna conversas com mensagens recebidas não respondidas"""
     try:
         with get_db() as conn:
@@ -113,7 +112,7 @@ def buscar_conversas_pendentes():
                 AND m.respondida = FALSE
                 ORDER BY c.id, m.id
                 """,
-                (OLX_EMAIL,),
+                (email,),
             ).fetchall()
 
             resultado = {}
@@ -141,18 +140,18 @@ def buscar_conversas_pendentes():
         logger.error(f"Erro ao buscar conversas pendentes na DB: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao buscar conversas")
 
-@app.post("/enviar-mensagem/{anuncio_id}")
-def enviar_mensagem(anuncio_id: str, mensagem_data: MensagemRequest):
+@app.post("/enviar-mensagem/{email}/{anuncio_id}")
+def enviar_mensagem(email: str, anuncio_id: str, mensagem_data: MensagemRequest):
     """Registra uma mensagem enviada e marca todas as mensagens recebidas anteriores como respondidas"""
     try:
         with get_db() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO conversas (email, anuncio_id) VALUES (?, ?)",
-                (OLX_EMAIL, anuncio_id),
+                (email, anuncio_id),
             )
             conversa = conn.execute(
                 "SELECT id FROM conversas WHERE email = ? AND anuncio_id = ?",
-                (OLX_EMAIL, anuncio_id),
+                (email, anuncio_id),
             ).fetchone()
 
             if not conversa:
@@ -182,18 +181,18 @@ def enviar_mensagem(anuncio_id: str, mensagem_data: MensagemRequest):
         logger.error(f"Erro ao enviar mensagem na DB: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao enviar mensagem")
 
-@app.post("/receber-mensagem/{anuncio_id}")
-def receber_mensagem(anuncio_id: str, mensagem_data: MensagemRequest, tipo: str):
+@app.post("/receber-mensagem/{email}/{anuncio_id}")
+def receber_mensagem(email: str, anuncio_id: str, mensagem_data: MensagemRequest, tipo: str):
     """Registra uma mensagem recebida ou enviada"""
     try:
         with get_db() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO conversas (email, anuncio_id) VALUES (?, ?)",
-                (OLX_EMAIL, anuncio_id),
+                (email, anuncio_id),
             )
             conversa = conn.execute(
                 "SELECT id FROM conversas WHERE email = ? AND anuncio_id = ?",
-                (OLX_EMAIL, anuncio_id),
+                (email, anuncio_id),
             ).fetchone()
 
             if not conversa:
@@ -236,14 +235,14 @@ def receber_mensagem(anuncio_id: str, mensagem_data: MensagemRequest, tipo: str)
         logger.error(f"Erro ao receber mensagem na DB: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao receber mensagem")
 
-@app.get("/mensagem-existe/{anuncio_id}")
-def verificar_mensagem_existe(anuncio_id: str, mensagem: str, tipo: str):
+@app.get("/mensagem-existe/{email}/{anuncio_id}")
+def verificar_mensagem_existe(email: str, anuncio_id: str, mensagem: str, tipo: str):
     """Verifica se uma mensagem já existe na DB para um anúncio específico"""
     try:
         with get_db() as conn:
             # Busca a conversa
             conversa = conn.execute("SELECT id FROM conversas WHERE email = ? AND anuncio_id = ?", 
-                                  (OLX_EMAIL, anuncio_id)).fetchone()
+                                  (email, anuncio_id)).fetchone()
             
             if not conversa:
                 logger.info(f"Conversa não encontrada para anuncio_id: {anuncio_id}")
