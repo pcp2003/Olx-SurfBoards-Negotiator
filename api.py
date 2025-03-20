@@ -97,7 +97,7 @@ def criar_tabelas():
 # Criar tabelas ao iniciar a API
 criar_tabelas()
 
-@app.get("/conversas/pendentes/{email}")
+@app.get("/conversas/pendentes")
 def buscar_conversas_pendentes(email: str):
     """Retorna conversas com mensagens recebidas não respondidas"""
     try:
@@ -140,7 +140,7 @@ def buscar_conversas_pendentes(email: str):
         logger.error(f"Erro ao buscar conversas pendentes na DB: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao buscar conversas")
 
-@app.post("/enviar-mensagem/{email}/{anuncio_id}")
+@app.post("/enviar-mensagem")
 def enviar_mensagem(email: str, anuncio_id: str, mensagem_data: MensagemRequest):
     """Registra uma mensagem enviada e marca todas as mensagens recebidas anteriores como respondidas"""
     try:
@@ -181,7 +181,7 @@ def enviar_mensagem(email: str, anuncio_id: str, mensagem_data: MensagemRequest)
         logger.error(f"Erro ao enviar mensagem na DB: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao enviar mensagem")
 
-@app.post("/receber-mensagem/{email}/{anuncio_id}")
+@app.post("/receber-mensagem")
 def receber_mensagem(email: str, anuncio_id: str, mensagem_data: MensagemRequest, tipo: str):
     """Registra uma mensagem recebida ou enviada"""
     try:
@@ -235,7 +235,7 @@ def receber_mensagem(email: str, anuncio_id: str, mensagem_data: MensagemRequest
         logger.error(f"Erro ao receber mensagem na DB: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao receber mensagem")
 
-@app.get("/mensagem-existe/{email}/{anuncio_id}")
+@app.get("/mensagem-existe")
 def verificar_mensagem_existe(email: str, anuncio_id: str, mensagem: str, tipo: str):
     """Verifica se uma mensagem já existe na DB para um anúncio específico"""
     try:

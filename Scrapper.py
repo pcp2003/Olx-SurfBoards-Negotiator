@@ -196,8 +196,10 @@ class OlxScraper:
         """ Verifica se uma mensagem já existe na DB antes de enviá-la para a API """
         try:
             response = requests.get(
-                f"{self.api_url}/mensagem-existe/{CREDENTIALS['username']}/{anuncio_id}",
+                f"{self.api_url}/mensagem-existe",
                 params={
+                    "email": CREDENTIALS["username"],
+                    "anuncio_id": anuncio_id,
                     "mensagem": mensagem,
                     "tipo": tipo
                 }
@@ -217,9 +219,13 @@ class OlxScraper:
                 "mensagem": mensagem
             }
             response = requests.post(
-                f"{self.api_url}/receber-mensagem/{CREDENTIALS['username']}/{anuncio_id}",
+                f"{self.api_url}/receber-mensagem",
                 json=payload,
-                params={"tipo": tipo}
+                params={
+                    "email": CREDENTIALS["username"],
+                    "anuncio_id": anuncio_id,
+                    "tipo": tipo
+                }
             )
             if response.status_code == 200:
                 logger.info(f"Mensagem {tipo} registrada na API: {mensagem}")
@@ -233,7 +239,10 @@ class OlxScraper:
     def buscar_respostas_pendentes(self):
         """ Busca conversas com mensagens recebidas não respondidas na API """
         try:
-            response = requests.get(f"{self.api_url}/conversas/pendentes/{CREDENTIALS['username']}")
+            response = requests.get(
+                f"{self.api_url}/conversas/pendentes",
+                params={"email": CREDENTIALS["username"]}
+            )
             if response.status_code == 200:
                 return response.json().get("conversas_pendentes", [])
             logger.error(f"Erro ao buscar conversas pendentes: {response.text}")
