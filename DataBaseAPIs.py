@@ -262,6 +262,75 @@ def verificar_mensagem_existe(email: str, anuncio_id: str, mensagem: str, tipo: 
         logger.error(f"Erro ao verificar mensagem na DB: {e}")
         raise HTTPException(status_code=500, detail=f"Erro interno ao verificar mensagem: {str(e)}")
 
+@app.get("/mensagens")
+def buscar_mensagens(email: str, tipo: str = None, conversa_id: int = None, anuncio_id: str = None, respondida: bool = None):
+    """Retorna todas as mensagens de um usuário, com opção de filtrar por tipo, conversa, anúncio e status de resposta"""
+    try:
+        with get_db() as conn:
+            # Query base
+            query = """
+                SELECT c.id as conversa_id, c.email, c.anuncio_id, 
+                       m.id as mensagem_id, m.tipo, m.mensagem, m.respondida
+                FROM conversas c
+                JOIN mensagens m ON c.id = m.conversa_id
+                WHERE c.email = ?
+            """
+            params = [email]
+
+            # Adiciona filtro por tipo se especificado
+            if tipo:
+                if tipo not in ['enviada', 'recebida']:
+                    raise HTTPException(status_code=400, detail="Tipo inválido. Use 'enviada' ou 'recebida'")
+                query += " AND m.tipo = ?"
+                params.append(tipo)
+
+            # Adiciona filtro por conversa_id se especificado
+            if conversa_id:
+                query += " AND c.id = ?"
+                params.append(conversa_id)
+
+            # Adiciona filtro por anuncio_id se especificado
+            if anuncio_id:
+                query += " AND c.anuncio_id = ?"
+                params.append(anuncio_id)
+
+            # Adiciona filtro por respondida se especificado
+            if respondida is not None:
+                query += " AND m.respondida = ?"
+                params.append(respondida)
+
+            # Ordena por conversa e data da mensagem
+            query += " ORDER BY c.id, m.id"
+
+            # Executa a query
+            mensagens = conn.execute(query, params).fetchall()
+
+            # Organiza o resultado
+            resultado = {}
+            for msg in mensagens:
+                conversa_id = msg["conversa_id"]
+                if conversa_id not in resultado:
+                    resultado[conversa_id] = {
+                        "id": conversa_id,
+                        "email": msg["email"],
+                        "anuncio_id": msg["anuncio_id"],
+                        "mensagens": []
+                    }
+                resultado[conversa_id]["mensagens"].append({
+                    "id": msg["mensagem_id"],
+                    "conversa_id": conversa_id,
+                    "tipo": msg["tipo"],
+                    "mensagem": msg["mensagem"],
+                    "respondida": bool(msg["respondida"])
+                })
+
+            logger.info(f"Buscadas {len(resultado)} conversas com mensagens na DB")
+            return {"conversas": list(resultado.values())}
+
+    except Exception as e:
+        logger.error(f"Erro ao buscar mensagens na DB: {e}")
+        raise HTTPException(status_code=500, detail="Erro interno ao buscar mensagens")
+
 if __name__ == "__main__":
     logger.info("Iniciando servidor FastAPI")
     uvicorn.run(app, host="localhost", port=8000)

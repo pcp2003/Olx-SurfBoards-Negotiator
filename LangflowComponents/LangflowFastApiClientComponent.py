@@ -16,7 +16,8 @@ class FastAPIClient(Component):
         "buscar_pendentes",
         "enviar_mensagem",
         "receber_mensagem",
-        "verificar_mensagem"
+        "verificar_mensagem",
+        "buscar_mensagens"
     ]
 
     # Lista de tipos permitidos
@@ -26,7 +27,7 @@ class FastAPIClient(Component):
         MessageTextInput(
             name="acao",
             display_name="Ação",
-            info="Ação a ser executada (buscar_pendentes, enviar_mensagem, receber_mensagem, verificar_mensagem)",
+            info="Ação a ser executada (buscar_pendentes, enviar_mensagem, receber_mensagem, verificar_mensagem, buscar_mensagens)",
             value="",
             tool_mode=True
         ),
@@ -40,7 +41,7 @@ class FastAPIClient(Component):
         MessageTextInput(
             name="anuncio_id",
             display_name="ID do Anúncio",
-            info="ID do anúncio (não necessário para buscar_pendentes)",
+            info="ID do anúncio (não necessário para buscar_pendentes e buscar_mensagens)",
             value="",
             tool_mode=True
         ),
@@ -54,7 +55,21 @@ class FastAPIClient(Component):
         MessageTextInput(
             name="tipo",
             display_name="Tipo",
-            info="Tipo da mensagem (recebida/enviada) - necessário para receber_mensagem e verificar_mensagem",
+            info="Tipo da mensagem (recebida/enviada) - necessário para receber_mensagem, verificar_mensagem e buscar_mensagens",
+            value="",
+            tool_mode=True
+        ),
+        MessageTextInput(
+            name="conversa_id",
+            display_name="ID da Conversa",
+            info="ID da conversa para filtrar mensagens (opcional)",
+            value="",
+            tool_mode=True
+        ),
+        MessageTextInput(
+            name="respondida",
+            display_name="Status de Resposta",
+            info="Status de resposta da mensagem (true/false) - opcional para buscar_mensagens",
             value="",
             tool_mode=True
         )
@@ -117,13 +132,24 @@ class FastAPIClient(Component):
                         "mensagem": self.mensagem,
                         "tipo": self.tipo
                     }
+                },
+                "buscar_mensagens": {
+                    "endpoint": "mensagens",
+                    "method": "GET",
+                    "params": {
+                        "email": self.email,
+                        "tipo": self.tipo if self.tipo else None,
+                        "conversa_id": int(self.conversa_id) if self.conversa_id else None,
+                        "anuncio_id": self.anuncio_id if self.anuncio_id else None,
+                        "respondida": bool(self.respondida.lower() == "true") if self.respondida else None
+                    }
                 }
             }
 
             acao_config = acoes[self.acao]
             
             # Validação de parâmetros específicos
-            if self.acao != "buscar_pendentes" and not self.anuncio_id:
+            if self.acao not in ["buscar_pendentes", "buscar_mensagens"] and not self.anuncio_id:
                 return Data(value="ID do anúncio é obrigatório para esta ação")
             
             if self.acao in ["enviar_mensagem", "receber_mensagem"] and not self.mensagem:
