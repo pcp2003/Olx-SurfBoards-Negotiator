@@ -28,7 +28,8 @@ CREDENTIALS = {
 URLS = {
     "favorites": "https://www.olx.pt/favoritos/",
     "base_url": "https://www.olx.pt",
-    "api": "http://localhost:8000"  # URL da API FastAPI
+    "api": "http://localhost:8000",  # URL da API FastAPI
+    "Langflow_URL" : "http://127.0.0.1:7860/api/v1/run/a0075945-5b70-43d4-9a82-ab84ddc6be27"
 }
 
 # Configurações de logging

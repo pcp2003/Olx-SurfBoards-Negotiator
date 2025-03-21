@@ -13,11 +13,8 @@ class FastAPIClient(Component):
 
     # Lista de ações permitidas
     ACOES_PERMITIDAS = [
-        "buscar_pendentes",
-        "enviar_mensagem",
-        "receber_mensagem",
-        "verificar_mensagem",
-        "buscar_mensagens"
+        "buscar_mensagens",
+        "enviar_mensagem"
     ]
 
     # Lista de tipos permitidos
@@ -27,7 +24,7 @@ class FastAPIClient(Component):
         MessageTextInput(
             name="acao",
             display_name="Ação",
-            info="Ação a ser executada (buscar_pendentes, enviar_mensagem, receber_mensagem, verificar_mensagem, buscar_mensagens)",
+            info="Ação a ser executada (buscar_mensagens, enviar_mensagem)",
             value="",
             tool_mode=True
         ),
@@ -41,21 +38,21 @@ class FastAPIClient(Component):
         MessageTextInput(
             name="anuncio_id",
             display_name="ID do Anúncio",
-            info="ID do anúncio (não necessário para buscar_pendentes e buscar_mensagens)",
+            info="ID do anúncio (necessário apenas para enviar_mensagem)",
             value="",
             tool_mode=True
         ),
         MessageTextInput(
             name="mensagem",
             display_name="Mensagem",
-            info="Texto da mensagem (necessário para enviar_mensagem e receber_mensagem)",
+            info="Texto da mensagem (necessário para enviar_mensagem)",
             value="",
             tool_mode=True
         ),
         MessageTextInput(
             name="tipo",
             display_name="Tipo",
-            info="Tipo da mensagem (recebida/enviada) - necessário para receber_mensagem, verificar_mensagem e buscar_mensagens",
+            info="Tipo da mensagem (recebida/enviada) - opcional para buscar_mensagens",
             value="",
             tool_mode=True
         ),
@@ -99,11 +96,6 @@ class FastAPIClient(Component):
 
             # Mapeamento de ações para endpoints e métodos
             acoes = {
-                "buscar_pendentes": {
-                    "endpoint": "conversas/pendentes",
-                    "method": "GET",
-                    "params": {"email": self.email}
-                },
                 "enviar_mensagem": {
                     "endpoint": "enviar-mensagem",
                     "method": "POST",
@@ -112,26 +104,6 @@ class FastAPIClient(Component):
                         "anuncio_id": self.anuncio_id
                     },
                     "data": {"mensagem": self.mensagem}
-                },
-                "receber_mensagem": {
-                    "endpoint": "receber-mensagem",
-                    "method": "POST",
-                    "params": {
-                        "email": self.email,
-                        "anuncio_id": self.anuncio_id,
-                        "tipo": self.tipo
-                    },
-                    "data": {"mensagem": self.mensagem}
-                },
-                "verificar_mensagem": {
-                    "endpoint": "mensagem-existe",
-                    "method": "GET",
-                    "params": {
-                        "email": self.email,
-                        "anuncio_id": self.anuncio_id,
-                        "mensagem": self.mensagem,
-                        "tipo": self.tipo
-                    }
                 },
                 "buscar_mensagens": {
                     "endpoint": "mensagens",
@@ -149,14 +121,11 @@ class FastAPIClient(Component):
             acao_config = acoes[self.acao]
             
             # Validação de parâmetros específicos
-            if self.acao not in ["buscar_pendentes", "buscar_mensagens"] and not self.anuncio_id:
-                return Data(value="ID do anúncio é obrigatório para esta ação")
-            
-            if self.acao in ["enviar_mensagem", "receber_mensagem"] and not self.mensagem:
-                return Data(value="Mensagem é obrigatória para esta ação")
-            
-            if self.acao in ["receber_mensagem", "verificar_mensagem"] and not self.tipo:
-                return Data(value="Tipo é obrigatório para esta ação")
+            if self.acao == "enviar_mensagem":
+                if not self.anuncio_id:
+                    return Data(value="ID do anúncio é obrigatório para enviar mensagem")
+                if not self.mensagem:
+                    return Data(value="Mensagem é obrigatória para enviar mensagem")
 
             # Realizar a requisição
             url = f"{base_url}/{acao_config['endpoint']}"

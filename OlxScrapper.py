@@ -12,6 +12,7 @@ from datetime import datetime
 from config import BROWSER_OPTIONS, TIMEOUTS, CREDENTIALS, URLS, LOGGING
 import os
 import requests
+from typing import Dict, Any, Optional
 
 
 # Configuração do logging
@@ -19,7 +20,7 @@ logging.basicConfig(
     level=getattr(logging, LOGGING["level"]),
     format=LOGGING["format"],
     handlers=[
-        logging.FileHandler(LOGGING["file"]),
+        logging.FileHandler(LOGGING["file"], encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -33,6 +34,15 @@ class OlxScraper:
         self.links_cache = set()
         self.load_cache()
         self.api_url = URLS["api"]  # URL da API FastAPI do arquivo de configuração
+        # Adicionando métricas
+        self.metricas = {
+            'mensagens_processadas': 0,
+            'respostas_enviadas': 0,
+            'erros': 0,
+            'inicio_execucao': None,
+            'ultima_verificacao': None,
+            'tempo_total_execucao': 0
+        }
 
     def load_cache(self):
         """Carrega o cache de links já processados"""
@@ -192,49 +202,74 @@ class OlxScraper:
 
     
 
-    def verificar_mensagem_existe(self, anuncio_id, mensagem, tipo):
-        """ Verifica se uma mensagem já existe na DB antes de enviá-la para a API """
-        try:
-            response = requests.get(
-                f"{self.api_url}/mensagem-existe",
-                params={
-                    "email": CREDENTIALS["username"],
-                    "anuncio_id": anuncio_id,
-                    "mensagem": mensagem,
-                    "tipo": tipo
-                }
-            )
-            if response.status_code == 200:
-                return response.json().get("existe", False)
-            logger.error(f"Erro ao verificar mensagem na API: {response.text}")
-            return False
-        except Exception as e:
-            logger.error(f"Erro ao verificar mensagem na API: {e}")
-            return False
-
-    def enviar_mensagem_para_api(self, anuncio_id, mensagem, tipo):
-        """ Envia uma mensagem extraída pelo scraper para a API FastAPI """
-        try:
-            payload = {
-                "mensagem": mensagem
-            }
-            response = requests.post(
-                f"{self.api_url}/receber-mensagem",
-                json=payload,
-                params={
-                    "email": CREDENTIALS["username"],
-                    "anuncio_id": anuncio_id,
-                    "tipo": tipo
-                }
-            )
-            if response.status_code == 200:
-                logger.info(f"Mensagem {tipo} registrada na API: {mensagem}")
+    def atualizar_metricas(self, tipo: str, valor: Any = 1) -> None:
+        """Atualiza as métricas do scraper"""
+        if tipo in self.metricas:
+            if isinstance(self.metricas[tipo], (int, float)):
+                self.metricas[tipo] += valor
             else:
+                self.metricas[tipo] = valor
+
+    def log_metricas(self) -> None:
+        """Registra as métricas atuais"""
+        logger.info("Métricas do Scraper:")
+        for key, value in self.metricas.items():
+            logger.info(f"  {key}: {value}")
+
+    def verificar_mensagem_existe(self, anuncio_id: str, mensagem: str, tipo: str) -> bool:
+        """Verifica se uma mensagem já existe na DB antes de enviá-la para a API"""
+        max_tentativas = 3
+        for tentativa in range(max_tentativas):
+            try:
+                response = requests.get(
+                    f"{self.api_url}/mensagem-existe",
+                    params={
+                        "email": CREDENTIALS["username"],
+                        "anuncio_id": anuncio_id,
+                        "mensagem": mensagem,
+                        "tipo": tipo
+                    },
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    return response.json().get("existe", False)
+                logger.error(f"Erro ao verificar mensagem na API: {response.text}")
+                if tentativa < max_tentativas - 1:
+                    time.sleep(2)
+            except Exception as e:
+                logger.error(f"Tentativa {tentativa + 1} falhou: {e}")
+                if tentativa < max_tentativas - 1:
+                    time.sleep(2)
+        return False
+
+    def enviar_mensagem_para_api(self, anuncio_id: str, mensagem: str, tipo: str) -> bool:
+        """Envia uma mensagem extraída pelo scraper para a API FastAPI"""
+        max_tentativas = 3
+        for tentativa in range(max_tentativas):
+            try:
+                payload = {"mensagem": mensagem}
+                response = requests.post(
+                    f"{self.api_url}/receber-mensagem",
+                    json=payload,
+                    params={
+                        "email": CREDENTIALS["username"],
+                        "anuncio_id": anuncio_id,
+                        "tipo": tipo
+                    },
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    logger.info(f"Mensagem {tipo} registrada na API: {mensagem}")
+                    self.atualizar_metricas('mensagens_processadas')
+                    return True
                 logger.error(f"Erro ao registrar mensagem na API: {response.text}")
-            return response.status_code == 200
-        except Exception as e:
-            logger.error(f"Erro ao registrar mensagem na API: {e}")
-            return False
+                if tentativa < max_tentativas - 1:
+                    time.sleep(2)
+            except Exception as e:
+                logger.error(f"Tentativa {tentativa + 1} falhou: {e}")
+                if tentativa < max_tentativas - 1:
+                    time.sleep(2)
+        return False
 
     def buscar_respostas_pendentes(self):
         """ Busca conversas com mensagens recebidas não respondidas na API """
@@ -251,36 +286,48 @@ class OlxScraper:
             logger.error(f"Erro ao buscar conversas pendentes: {e}")
             return []
 
-    def enviar_mensagem_olx(self, anuncio_id, mensagem):
-        """ Envia a mensagem de resposta no OLX """
-        try:
-            # Encontrar a aba correta do anúncio
-            abas = self.driver.window_handles
-            for aba in abas[1:]:  # Pula a primeira aba (favoritos)
-                self.driver.switch_to.window(aba)
-                if anuncio_id in self.driver.current_url:
-                    break
-            else:
-                logger.error(f"Anúncio {anuncio_id} não encontrado nas abas abertas")
-                return False
+    def enviar_mensagem_olx(self, anuncio_id: str, mensagem: str) -> bool:
+        """Envia a mensagem de resposta no OLX"""
+        max_tentativas = 3
+        for tentativa in range(max_tentativas):
+            try:
+                # Encontrar a aba correta do anúncio
+                abas = self.driver.window_handles
+                for aba in abas[1:]:  # Pula a primeira aba (favoritos)
+                    self.driver.switch_to.window(aba)
+                    if anuncio_id in self.driver.current_url:
+                        break
+                else:
+                    logger.error(f"Anúncio {anuncio_id} não encontrado nas abas abertas")
+                    if tentativa < max_tentativas - 1:
+                        time.sleep(2)
+                    continue
 
-            # Encontrar e preencher campo de mensagem
-            campo_mensagem = self.wait.until(
-                EC.presence_of_element_located((By.NAME, "message.text"))  # Usando NAME correto
-            )
+                # Encontrar e preencher campo de mensagem
+                campo_mensagem = self.wait.until(
+                    EC.presence_of_element_located((By.NAME, "message.text"))
+                )
 
-            # Enviar a mensagem
-            campo_mensagem.clear()
-            campo_mensagem.send_keys(mensagem)
-            campo_mensagem.send_keys(Keys.RETURN)
-            
-            logger.info(f" Mensagem enviada no OLX: {mensagem}")
-            return True
+                # Limpar campo e enviar mensagem
+                campo_mensagem.clear()
+                campo_mensagem.send_keys(mensagem)
+                campo_mensagem.send_keys(Keys.RETURN)
+                
+                # Verificar se a mensagem foi enviada
+                time.sleep(2)  # Pequena pausa para garantir o envio
+                logger.info(f" Mensagem enviada no OLX: {mensagem}")
+                return True
 
-        except Exception as e:
-            logger.error(f"Erro ao enviar mensagem no OLX: {e}")
-            return False
-
+            except TimeoutException:
+                logger.error(f"Timeout ao tentar enviar mensagem (tentativa {tentativa + 1})")
+                if tentativa < max_tentativas - 1:
+                    time.sleep(2)
+            except Exception as e:
+                logger.error(f"Erro ao enviar mensagem no OLX (tentativa {tentativa + 1}): {e}")
+                if tentativa < max_tentativas - 1:
+                    time.sleep(2)
+        
+        return False
 
     def extrair_mensagens_vendedor(self):
         """ Extrai mensagens de vendedores e envia para a API """
@@ -368,58 +415,68 @@ class OlxScraper:
 
 
     def ciclo_de_respostas(self):
-        """ Loop infinito para buscar mensagens e mostrar as pendentes """
+        """Loop para buscar mensagens pendentes e gerar respostas automáticas"""
+        self.metricas['inicio_execucao'] = datetime.now()
+        
         while True:
-            logger.info("🔄 Verificando conversas pendentes...")
-            conversas_pendentes = self.buscar_respostas_pendentes()
+            try:
+                logger.info("Verificando conversas pendentes...")
+                conversas_pendentes = self.buscar_respostas_pendentes()
 
-            if conversas_pendentes:
-                print("\n" + "="*50)
-                print("📬 CONVERSAS PENDENTES:")
-                print("="*50)
-                
-                for conversa in conversas_pendentes:
-                    print(f"\n📝 Anúncio ID: {conversa['anuncio_id']}")
-                    for msg in conversa['mensagens']:
-                        if msg['tipo'] == 'recebida' and not msg['respondida']:
-                            print(f"💬 Mensagem: {msg['mensagem']}")
-                    print("-"*30)
-                
-                print("\n" + "="*50)
-                print("🤖 ÁREA PREPARADA PARA INTEGRAÇÃO COM LANGFLOW")
-                print("="*50 + "\n")
-                
-                # TODO: Aqui será integrado o Langflow para gerar respostas
-                # Exemplo de como será:
-                # for conversa in conversas_pendentes:
-                #     for msg in conversa['mensagens']:
-                #         if msg['tipo'] == 'recebida' and not msg['respondida']:
-                #             resposta = langflow.gerar_resposta(msg['mensagem'])
-                #             self.enviar_mensagem_olx(conversa['anuncio_id'], resposta)
-            else:
-                logger.info("⏳ Nenhuma conversa pendente.")
+                if conversas_pendentes:
+                    for conversa in conversas_pendentes:
+                        for msg in conversa['mensagens']:
+                            if msg['tipo'] == 'recebida' and not msg['respondida']:
+                                logger.info(f"Gerando resposta para: {msg['mensagem']}")
+                                
+                                resposta = self.obter_resposta_langflow(msg['mensagem'])
+                                
+                                if resposta:
+                                    # if self.enviar_mensagem_olx(conversa['anuncio_id'], resposta):
+                                        logger.info(f"Resposta enviada: {resposta}")
+                                        self.atualizar_metricas('respostas_enviadas')
+                                    # else:
+                                        logger.error(f"Falha ao enviar resposta no OLX")
+                                        self.atualizar_metricas('erros')
+                                else:
+                                    logger.warning(f"Falha ao gerar resposta")
+                                    self.atualizar_metricas('erros')
 
-            # Verifica novas mensagens dos vendedores a cada 5 minutos
-            logger.info("🔄 Verificando novas mensagens dos vendedores...")
-            self.extrair_mensagens_vendedor()
-            
-            # Aguarda 5 minutos antes da próxima verificação
-            logger.info("⏳ Aguardando 5 minutos para próxima verificação...")
-            time.sleep(300)  # 5 minutos = 300 segundos
+                # Verificar novas mensagens
+                logger.info("Verificando novas mensagens...")
+                self.extrair_mensagens_vendedor()
+                
+                # Atualizar métricas
+                self.metricas['ultima_verificacao'] = datetime.now()
+                self.metricas['tempo_total_execucao'] = (self.metricas['ultima_verificacao'] - self.metricas['inicio_execucao']).total_seconds()
+                
+                # Log das métricas a cada ciclo
+                self.log_metricas()
+                
+                # Aguardar próximo ciclo
+                time.sleep(30)
+                
+            except Exception as e:
+                logger.error(f"Erro no ciclo de respostas: {e}")
+                self.atualizar_metricas('erros')
+                time.sleep(60)  # Espera mais tempo em caso de erro
 
 
     def executar(self):
-        """ Executa o scraper completo """
-        if not self.iniciar_navegador():
-            return False
-
+        """Executa o scraper completo"""
         try:
+            if not self.iniciar_navegador():
+                logger.error("Falha ao iniciar o navegador")
+                return False
+
             self.driver.get(URLS["favorites"])
 
             if not self.aceitar_cookies():
+                logger.error("Falha ao aceitar cookies")
                 return False
                 
             if not self.login():
+                logger.error("Falha no login")
                 return False
 
             # Coleta links e abre abas
@@ -439,18 +496,115 @@ class OlxScraper:
             return True
         except Exception as e:
             logger.error(f"Erro durante a execução: {e}")
+            self.atualizar_metricas('erros')
             return False
         finally:
             self.finalizar()
+            # Log final das métricas
+            self.log_metricas()
+
+
+    def obter_resposta_langflow(self, mensagem: str) -> Optional[str]:
+        """
+        Envia a mensagem para o Langflow e obtém a resposta.
+        
+        Args:
+            mensagem (str): A mensagem a ser processada pelo Langflow
+            
+        Returns:
+            Optional[str]: A resposta do Langflow ou None em caso de falha
+            
+        Raises:
+            ValueError: Se a mensagem estiver vazia ou for None
+        """
+        if not mensagem or not isinstance(mensagem, str):
+            logger.error("Mensagem inválida fornecida para o Langflow")
+            return None
+            
+        max_tentativas = 3
+        langflow_url = URLS["Langflow_URL"].replace("/predict/", "/run/")
+        
+        for tentativa in range(max_tentativas):
+            try:
+                logger.info(f"Enviando mensagem para o Langflow (tentativa {tentativa + 1}/{max_tentativas})")
+                
+                response = requests.post(
+                    langflow_url, 
+                    json={"input": {"pergunta": mensagem}},
+                    timeout=30,
+                    headers={"Content-Type": "application/json"}
+                )
+
+                if response.status_code == 200:
+                    try:
+                        resposta_json = response.json()
+                        logger.debug(f"Resposta completa do Langflow: {resposta_json}")
+                        
+                        # Tenta diferentes caminhos possíveis para a resposta
+                        caminhos_resposta = [
+                            ("response", "output"),
+                            ("output",),
+                            ("data",),
+                            ("result",),
+                            ("response",)
+                        ]
+                        
+                        for caminho in caminhos_resposta:
+                            valor = resposta_json
+                            for chave in caminho:
+                                if isinstance(valor, dict):
+                                    valor = valor.get(chave)
+                                else:
+                                    valor = None
+                                    break
+                            if valor:
+                                resposta = str(valor).strip()
+                                if resposta:
+                                    logger.info(f"Resposta obtida com sucesso: {resposta[:100]}...")
+                                    return resposta
+                        
+                        logger.warning("Nenhuma resposta válida encontrada no JSON retornado")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Erro ao decodificar JSON da resposta: {e}")
+                        logger.debug(f"Resposta recebida: {response.text}")
+                else:
+                    logger.error(f"Erro na requisição ao Langflow (status {response.status_code}): {response.text}")
+
+                if tentativa < max_tentativas - 1:
+                    tempo_espera = (tentativa + 1) * 2  # Espera progressiva
+                    logger.info(f"Aguardando {tempo_espera} segundos antes da próxima tentativa...")
+                    time.sleep(tempo_espera)
+                    
+            except requests.Timeout:
+                logger.error(f"Timeout na tentativa {tentativa + 1}")
+                if tentativa < max_tentativas - 1:
+                    time.sleep((tentativa + 1) * 2)
+            except requests.RequestException as e:
+                logger.error(f"Erro de requisição ao Langflow: {e}")
+                if tentativa < max_tentativas - 1:
+                    time.sleep((tentativa + 1) * 2)
+            except Exception as e:
+                logger.error(f"Erro inesperado ao obter resposta do Langflow: {e}")
+                if tentativa < max_tentativas - 1:
+                    time.sleep((tentativa + 1) * 2)
+
+        logger.error("Todas as tentativas de obter resposta do Langflow falharam")
+        return None
+
 
 
 
 
 
 def main():
-    scraper = OlxScraper()
-    if not scraper.executar():
-        logger.error("Falha na execução do scraper")
+    try:
+        scraper = OlxScraper()
+        if not scraper.executar():
+            logger.error("Falha na execução do scraper")
+    except KeyboardInterrupt:
+        logger.info("Scraper interrompido pelo usuário")
+    except Exception as e:
+        logger.error(f"Erro inesperado: {e}")
 
 if __name__ == "__main__":
     main()
