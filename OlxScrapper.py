@@ -13,6 +13,7 @@ from config import BROWSER_OPTIONS, TIMEOUTS, CREDENTIALS, URLS, LOGGING
 import os
 import requests
 from typing import Dict, Any, Optional
+import uuid
 
 
 # Configuração do logging
@@ -132,28 +133,65 @@ class OlxScraper:
     def append_links(self):
         """Acessa a página de favoritos e coleta os links"""
         try:
-            self.wait.until(
-                EC.visibility_of_element_located((By.XPATH, '//*[@id="mainContent"]/div/div[2]/section/div[2]/div'))
-            )
-            favoritos = self.wait.until(
-                EC.presence_of_all_elements_located((By.CLASS_NAME, "css-qo0cxu"))
-            )
-
+            # Aguarda a página carregar completamente
+            logger.info("Aguardando carregamento da página de favoritos...")
+            time.sleep(5)  # Pequena pausa para garantir carregamento
+            
+            # Tenta diferentes seletores para encontrar os favoritos
+            seletores = [
+                (By.CLASS_NAME, "css-qo0cxu"),
+                (By.CSS_SELECTOR, "a[href*='/favoritos/']"),
+                (By.CSS_SELECTOR, "[data-testid='favorites-item']")
+            ]
+            
+            favoritos = None
+            for seletor in seletores:
+                try:
+                    logger.info(f"Tentando encontrar favoritos com seletor: {seletor}")
+                    favoritos = self.wait.until(
+                        EC.presence_of_all_elements_located(seletor)
+                    )
+                    if favoritos:
+                        logger.info(f"Favoritos encontrados com seletor: {seletor}")
+                        break
+                except Exception as e:
+                    logger.debug(f"Seletor {seletor} não funcionou: {str(e)}")
+                    continue
+            
+            if not favoritos:
+                logger.error("Nenhum favorito encontrado")
+                return []
+            
             novos_links = set()
             for favorito in favoritos:
                 try:
-                    link = favorito.get_attribute("href").replace("?", "?chat=1&isPreviewActive=0&")
+                    link = favorito.get_attribute("href")
+                    if not link:
+                        continue
+                        
+                    # Adiciona parâmetros necessários ao link
+                    link = link.replace("?", "?chat=1&isPreviewActive=0&")
+                    
                     if link and link not in self.links_cache:
                         novos_links.add(link)
                         self.links_cache.add(link)
+                        logger.debug(f"Novo link encontrado: {link}")
                 except Exception as e:
-                    logger.error(f"Erro ao processar um favorito: {e}")
+                    logger.error(f"Erro ao processar um favorito: {str(e)}")
+                    continue
 
             logger.info(f"{len(novos_links)} novos links encontrados")
             return self.links_cache
         
         except Exception as e:
-            logger.error(f"Erro ao acessar favoritos: {e}")
+            logger.error(f"Erro ao acessar favoritos: {str(e)}")
+            # Tenta salvar o HTML da página para debug
+            try:
+                with open("debug_page.html", "w", encoding="utf-8") as f:
+                    f.write(self.driver.page_source)
+                logger.info("HTML da página salvo em debug_page.html")
+            except:
+                pass
             return []
 
     def abrir_anuncios_em_abas(self, links):
@@ -436,8 +474,8 @@ class OlxScraper:
                                         logger.info(f"Resposta enviada: {resposta}")
                                         self.atualizar_metricas('respostas_enviadas')
                                     # else:
-                                        logger.error(f"Falha ao enviar resposta no OLX")
-                                        self.atualizar_metricas('erros')
+                                        # logger.error(f"Falha ao enviar resposta no OLX")
+                                        # self.atualizar_metricas('erros')
                                 else:
                                     logger.warning(f"Falha ao gerar resposta")
                                     self.atualizar_metricas('erros')
@@ -504,92 +542,104 @@ class OlxScraper:
             self.log_metricas()
 
 
-    def obter_resposta_langflow(self, mensagem: str) -> Optional[str]:
+    def obter_resposta_langflow(self, mensagem: str, session_id: Optional[str] = None) -> Optional[str]:
         """
         Envia a mensagem para o Langflow e obtém a resposta.
         
         Args:
             mensagem (str): A mensagem a ser processada pelo Langflow
+            session_id (str, optional): ID da sessão existente. Se None, gera um novo.
             
         Returns:
             Optional[str]: A resposta do Langflow ou None em caso de falha
-            
-        Raises:
-            ValueError: Se a mensagem estiver vazia ou for None
         """
         if not mensagem or not isinstance(mensagem, str):
             logger.error("Mensagem inválida fornecida para o Langflow")
             return None
             
-        max_tentativas = 3
-        langflow_url = URLS["Langflow_URL"].replace("/predict/", "/run/")
-        
-        for tentativa in range(max_tentativas):
-            try:
-                logger.info(f"Enviando mensagem para o Langflow (tentativa {tentativa + 1}/{max_tentativas})")
+        try:
+            langflow_url = URLS["Langflow_URL"].replace("/predict/", "/run/")
+            logger.info(f"Obtendo resposta para a mensagem: {mensagem}")
+            
+            # Usa session_id existente ou gera um novo
+            current_session_id = session_id if session_id else str(uuid.uuid4())
+            
+            # Payload corrigido baseado na estrutura do seu fluxo
+            payload = {
+                "input_value": mensagem,  # Seu fluxo espera input_value direto
+                "output_type": "chat",
+                "input_type": "chat",
+                "tweaks": {
+                    "ChatInput-g5RAZ": {  # Nome exato do seu componente de entrada
+                        "session_id": session_id or str(uuid.uuid4()),
+                        "sender": "User"
+                    }
+                }
+            }
+            
+            response = requests.post(
+                langflow_url, 
+                json=payload,
+                timeout=30,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                }
+            )
+
+            if response.status_code == 200:
+                resposta_json = response.json()
+                logger.debug(f"Resposta completa do Langflow: {resposta_json}")
                 
-                response = requests.post(
-                    langflow_url, 
-                    json={"input": {"pergunta": mensagem}},
-                    timeout=30,
-                    headers={"Content-Type": "application/json"}
-                )
-
-                if response.status_code == 200:
-                    try:
-                        resposta_json = response.json()
-                        logger.debug(f"Resposta completa do Langflow: {resposta_json}")
-                        
-                        # Tenta diferentes caminhos possíveis para a resposta
-                        caminhos_resposta = [
-                            ("response", "output"),
-                            ("output",),
-                            ("data",),
-                            ("result",),
-                            ("response",)
-                        ]
-                        
-                        for caminho in caminhos_resposta:
-                            valor = resposta_json
-                            for chave in caminho:
-                                if isinstance(valor, dict):
-                                    valor = valor.get(chave)
-                                else:
-                                    valor = None
-                                    break
-                            if valor:
-                                resposta = str(valor).strip()
-                                if resposta:
-                                    logger.info(f"Resposta obtida com sucesso: {resposta[:100]}...")
-                                    return resposta
-                        
-                        logger.warning("Nenhuma resposta válida encontrada no JSON retornado")
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Erro ao decodificar JSON da resposta: {e}")
-                        logger.debug(f"Resposta recebida: {response.text}")
-                else:
-                    logger.error(f"Erro na requisição ao Langflow (status {response.status_code}): {response.text}")
-
-                if tentativa < max_tentativas - 1:
-                    tempo_espera = (tentativa + 1) * 2  # Espera progressiva
-                    logger.info(f"Aguardando {tempo_espera} segundos antes da próxima tentativa...")
-                    time.sleep(tempo_espera)
+                # Extração robusta da mensagem de resposta
+                try:
+                    # Caminho principal baseado na estrutura do JSON fornecido
+                    if 'outputs' in resposta_json:
+                        for output in resposta_json['outputs']:
+                            if 'outputs' in output:
+                                for sub_output in output['outputs']:
+                                    if 'results' in sub_output:
+                                        results = sub_output['results']
+                                        if 'message' in results:
+                                            message_data = results['message']
+                                            if isinstance(message_data, dict):
+                                                # Tenta obter o texto da resposta em vários caminhos possíveis
+                                                if 'data' in message_data and 'text' in message_data['data']:
+                                                    return message_data['data']['text']
+                                                elif 'text' in message_data:
+                                                    return message_data['text']
+                                                elif 'message' in message_data:
+                                                    return message_data['message']
                     
-            except requests.Timeout:
-                logger.error(f"Timeout na tentativa {tentativa + 1}")
-                if tentativa < max_tentativas - 1:
-                    time.sleep((tentativa + 1) * 2)
-            except requests.RequestException as e:
-                logger.error(f"Erro de requisição ao Langflow: {e}")
-                if tentativa < max_tentativas - 1:
-                    time.sleep((tentativa + 1) * 2)
-            except Exception as e:
-                logger.error(f"Erro inesperado ao obter resposta do Langflow: {e}")
-                if tentativa < max_tentativas - 1:
-                    time.sleep((tentativa + 1) * 2)
-
-        logger.error("Todas as tentativas de obter resposta do Langflow falharam")
-        return None
+                    # Fallback para caminhos alternativos
+                    if 'message' in resposta_json:
+                        if isinstance(resposta_json['message'], dict):
+                            if 'text' in resposta_json['message']:
+                                return resposta_json['message']['text']
+                            elif 'data' in resposta_json['message'] and 'text' in resposta_json['message']['data']:
+                                return resposta_json['message']['data']['text']
+                        elif isinstance(resposta_json['message'], str):
+                            return resposta_json['message']
+                    
+                    # Último fallback: procura em toda a estrutura por um campo 'text'
+                    if 'text' in resposta_json:
+                        return resposta_json['text']
+                    
+                except (KeyError, TypeError) as e:
+                    logger.warning(f"Erro ao extrair resposta: {e}")
+                
+                logger.warning("Nenhuma resposta válida encontrada no JSON retornado")
+                return None
+            else:
+                logger.error(f"Erro na requisição ao Langflow (status {response.status_code}): {response.text}")
+                return None
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Erro de conexão com o Langflow: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Erro inesperado ao obter resposta do Langflow: {e}")
+            return None
 
 
 
