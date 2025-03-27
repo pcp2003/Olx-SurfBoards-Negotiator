@@ -13,6 +13,7 @@ class FastAPIClient(Component):
 
     # Lista de ações permitidas
     ACOES_PERMITIDAS = [
+        "buscar_conversas_pendentes",
         "buscar_mensagens",
         "enviar_mensagem"
     ]
@@ -24,7 +25,7 @@ class FastAPIClient(Component):
         MessageTextInput(
             name="acao",
             display_name="Ação",
-            info="Ação a ser executada (buscar_mensagens, enviar_mensagem)",
+            info="Ação a ser executada (buscar_conversas_pendentes, buscar_mensagens, enviar_mensagem)",
             value="",
             tool_mode=True
         ),
@@ -111,9 +112,16 @@ class FastAPIClient(Component):
                     "params": {
                         "email": self.email,
                         "tipo": self.tipo if self.tipo else None,
-                        "conversa_id": int(self.conversa_id) if self.conversa_id else None,
+                        "conversa_id": str(self.conversa_id) if self.conversa_id else None,
                         "anuncio_id": self.anuncio_id if self.anuncio_id else None,
                         "respondida": bool(self.respondida.lower() == "true") if self.respondida else None
+                    }
+                },
+                "buscar_conversas_pendentes": {
+                    "endpoint": "conversas/pendentes",
+                    "method": "GET",
+                    "params": {
+                        "email": self.email
                     }
                 }
             }
@@ -133,10 +141,21 @@ class FastAPIClient(Component):
             params = acao_config.get('params')
             data = acao_config.get('data')
 
+            # Log para debug
+            print(f"Fazendo requisição para: {url}")
+            print(f"Método: {method}")
+            print(f"Parâmetros: {params}")
+            if data:
+                print(f"Dados: {data}")
+
             if method == "GET":
                 response = requests.get(url, params=params, headers=headers)
             else:
                 response = requests.post(url, params=params, json=data, headers=headers)
+
+            # Log da resposta para debug
+            print(f"Status code: {response.status_code}")
+            print(f"Resposta: {response.text}")
 
             response.raise_for_status()
             data = Data(value=json.dumps(response.json(), ensure_ascii=False))

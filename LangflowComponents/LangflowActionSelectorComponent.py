@@ -11,6 +11,7 @@ class ActionSelector(Component):
 
     # Lista de ações permitidas
     ACOES_PERMITIDAS = [
+        "buscar_conversas_pendentes",
         "buscar_mensagens",
         "enviar_mensagem"
     ]
@@ -35,16 +36,20 @@ class ActionSelector(Component):
 
     def process_inputs(self) -> Data:
         try:
+            # Se o input contiver palavras-chave relacionadas a buscar conversas pendentes
+            if any(palavra in self.input.lower() for palavra in ["pendentes", "novas", "não respondidas", "não respondido", "conversas pendentes"]):
+                return Data(value="buscar_conversas_pendentes")
+            
             # Se o input contiver palavras-chave relacionadas a buscar mensagens
-            if any(palavra in self.input.lower() for palavra in ["buscar", "procurar", "encontrar", "listar", "ver", "mostrar"]):
+            if any(palavra in self.input.lower() for palavra in ["buscar", "procurar", "encontrar", "listar", "ver", "mostrar", "histórico"]):
                 return Data(value="buscar_mensagens")
             
             # Se o input contiver palavras-chave relacionadas a enviar mensagem
             if any(palavra in self.input.lower() for palavra in ["enviar", "mandar", "responder", "resposta", "mensagem"]):
                 return Data(value="enviar_mensagem")
             
-            # Se não encontrar nenhuma palavra-chave, retorna buscar_mensagens como padrão
-            return Data(value="buscar_mensagens")
+            # Se não encontrar nenhuma palavra-chave, retorna buscar_conversas_pendentes como padrão
+            return Data(value="buscar_conversas_pendentes")
 
         except Exception as e:
             return Data(value=f"Erro: {str(e)}") 
