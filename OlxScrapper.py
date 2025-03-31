@@ -444,6 +444,38 @@ class OlxScraper:
             logger.error(f"Erro ao buscar conversas pendentes: {e}")
             return []
 
+    def reabrir_anuncio(self, anuncio_id: str) -> bool:
+        """Reabre a aba de um anúncio específico se ela não estiver disponível"""
+        try:
+            # Verifica se a aba já está aberta
+            abas = self.driver.window_handles
+            for aba in abas[1:]:  # Pula a primeira aba (favoritos)
+                self.driver.switch_to.window(aba)
+                if anuncio_id in self.driver.current_url:
+                    logger.info(f"Anúncio {anuncio_id} já está aberto em uma aba")
+                    return True
+            
+            # Se não estiver aberto, tenta reabrir
+            logger.info(f"Tentando reabrir anúncio {anuncio_id}...")
+            url = f"https://www.olx.com.br/item/{anuncio_id}"
+            self.driver.execute_script(f"window.open('{url}', '_blank');")
+            time.sleep(2)
+            
+            # Muda para a nova aba
+            self.driver.switch_to.window(self.driver.window_handles[-1])
+            
+            # Espera a página carregar
+            self.wait.until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            
+            logger.info(f"Anúncio {anuncio_id} reaberto com sucesso")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erro ao reabrir anúncio {anuncio_id}: {e}")
+            return False
+
     def enviar_mensagem_olx(self, anuncio_id: str, mensagem: str) -> bool:
         """Envia a mensagem de resposta no OLX"""
         max_tentativas = 3
@@ -451,17 +483,24 @@ class OlxScraper:
             try:
                 # Encontrar a aba correta do anúncio
                 abas = self.driver.window_handles
+                encontrou_aba = False
+                
                 for aba in abas[1:]:  # Pula a primeira aba (favoritos)
                     self.driver.switch_to.window(aba)
                     if anuncio_id in self.driver.current_url:
                         logger.info(f"Anúncio {anuncio_id} encontrado na aba")
+                        encontrou_aba = True
                         break
-                else:
-                    logger.error(f"Anúncio {anuncio_id} não encontrado nas abas abertas")
-                    if tentativa < max_tentativas - 1:
-                        time.sleep(2)
-                    continue
-
+                
+                # Se não encontrou a aba, tenta reabrir
+                if not encontrou_aba:
+                    logger.info(f"Anúncio {anuncio_id} não encontrado nas abas abertas, tentando reabrir...")
+                    if not self.reabrir_anuncio(anuncio_id):
+                        logger.error(f"Não foi possível reabrir o anúncio {anuncio_id}")
+                        if tentativa < max_tentativas - 1:
+                            time.sleep(2)
+                        continue
+                
                 # Encontrar e preencher campo de mensagem
                 logger.info("Procurando campo de mensagem...")
                 campo_mensagem = self.wait.until(
@@ -676,12 +715,12 @@ class OlxScraper:
                                 resposta = self.obter_resposta_langflow(msg['mensagem'], conversa['anuncio_id'])
                                 
                                 if resposta:
-                                    if self.enviar_mensagem_olx(conversa['anuncio_id'], resposta):
+                                    # if self.enviar_mensagem_olx(conversa['anuncio_id'], resposta):
                                         logger.info(f"Resposta enviada: {resposta}")
-                                        self.atualizar_metricas('respostas_enviadas')
-                                    else:
-                                        logger.error(f"Falha ao enviar resposta no OLX")
-                                        self.atualizar_metricas('erros')
+                                    #     self.atualizar_metricas('respostas_enviadas')
+                                    # else:
+                                    #     logger.error(f"Falha ao enviar resposta no OLX")
+                                    #     self.atualizar_metricas('erros')
                                 else:
                                     logger.warning(f"Falha ao gerar resposta")
                                     self.atualizar_metricas('erros')
@@ -783,40 +822,11 @@ class OlxScraper:
             else:
                 logger.warning(f"Erro ao buscar informações do anúncio: {response.text}")
             
-            # Buscar histórico da conversa
-            logger.info(f"Buscando histórico da conversa para o anúncio {anuncio_id}")
-            response = requests.get(
-                f"{self.api_url}/mensagens",
-                params={
-                    "email": CREDENTIALS["username"],
-                    "anuncio_id": anuncio_id
-                },
-                timeout=10
-            )
-            
-            historico = []
-            if response.status_code == 200:
-                historico = response.json().get("mensagens", [])
-                logger.info(f"Histórico encontrado: {len(historico)} mensagens")
-            else:
-                logger.warning(f"Erro ao buscar histórico: {response.text}")
-            
-            # Formatar histórico para o Langflow
-            historico_formatado = []
-            for msg in historico:
-                historico_formatado.append({
-                    "role": "vendedor" if msg["tipo"] == "recebida" else "comprador",
-                    "content": msg["mensagem"]
-                })
-            
             # Preparar input_value com as informações do anúncio
-            input_value = [
-                info_anuncio.get("titulo_anuncio", ""),
-                info_anuncio.get("nome_vendedor", ""),
-                info_anuncio.get("preco_anuncio", ""),
-                mensagem,
-                historico_formatado
-            ]
+            input_value = f"{anuncio_id},{info_anuncio.get('titulo_anuncio', '')},{info_anuncio.get('nome_vendedor', '')},{info_anuncio.get('preco_anuncio', '')},{mensagem}"
+            
+            # Log do input_value exato
+            logger.info(f"\ninput_value = {input_value}\n")
             
             langflow_url = URLS["Langflow_URL"].replace("/predict/", "/run/")
             logger.info(f"Obtendo resposta para a mensagem: {mensagem}")
@@ -824,24 +834,19 @@ class OlxScraper:
             # Usa session_id existente ou gera um novo
             current_session_id = session_id if session_id else str(uuid.uuid4())
             
-            # Payload atualizado baseado na nova estrutura do fluxo
+            # Payload simplificado sem histórico
             payload = {
+                "input_value": input_value,
                 "output_type": "chat",
                 "input_type": "chat",
                 "tweaks": {
-                    "ChatOutput-trXWe": {
-                        "background_color": "",
-                        "chat_icon": "",
-                        "clean_data": True,
-                        "data_template": "{text}",
-                        "input_value": input_value,
-                        "sender": "Machine",
-                        "sender_name": "Comprador",
-                        "session_id": current_session_id,
-                        "should_store_message": True,
-                        "text_color": "",
-                        "chat_history": historico_formatado  # Adiciona o histórico formatado
-                    }
+                    "ChatOutput-trXWe": {},
+                    "GetEnvVar-fD5AB": {},
+                    "CustomComponent-ZQxeP": {},
+                    "CustomComponent-iJBo4": {},
+                    "Agent-tIIK7": {},
+                    "ChatInput-g5RAZ": {},
+                    "Prompt-F7ylB": {}
                 }
             }
             
