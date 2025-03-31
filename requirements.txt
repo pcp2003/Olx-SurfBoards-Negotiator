@@ -1,20 +1,9 @@
 # Dependências do OLXScrapper.py
-selenium==4.18.1
-undetected-chromedriver==3.5.5
-requests==2.32.3
-
-# Dependências do DataBaseAPIs.py
-fastapi==0.115.11
-uvicorn==0.34.0
-pydantic==2.10.6
-
-# Dependências comuns
-python-dotenv==1.0.1
-
-# Dependências de sistema
-setuptools>=65.5.1
-websockets>=15.0.1
-urllib3>=2.3.0
-certifi>=2023.11.17,<2024.0.0
-beautifulsoup4>=4.12.3
-lxml>=5.1.0 
+selenium==4.15.2
+webdriver-manager==4.0.1
+python-dotenv==1.0.0
+requests==2.31.0
+pydantic==2.5.2
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6 
