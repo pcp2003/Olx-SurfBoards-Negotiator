@@ -166,15 +166,18 @@ class OlxScraper:
             
             # Tenta diferentes seletores para encontrar os favoritos
             seletores = [
-                (By.CLASS_NAME, "css-qo0cxu"),
+                (By.CSS_SELECTOR, 'a.css-1tqlkj0'),  # Novo seletor para links de anúncios
+                (By.CSS_SELECTOR, '[data-testid="observed-page-link"]'),
+                (By.CSS_SELECTOR, '[data-testid="favorites-item"]'),
                 (By.CSS_SELECTOR, "a[href*='/favoritos/']"),
-                (By.CSS_SELECTOR, "[data-testid='favorites-item']")
+                (By.CLASS_NAME, "css-qo0cxu")
             ]
             
             favoritos = None
             for seletor in seletores:
                 try:
                     logger.info(f"Tentando encontrar favoritos com seletor: {seletor}")
+                    # Aguarda até que pelo menos um elemento seja encontrado
                     favoritos = self.wait.until(
                         EC.presence_of_all_elements_located(seletor)
                     )
@@ -187,28 +190,63 @@ class OlxScraper:
             
             if not favoritos:
                 logger.error("Nenhum favorito encontrado")
+                # Salva o HTML da página para debug
+                try:
+                    with open("debug_page.html", "w", encoding="utf-8") as f:
+                        f.write(self.driver.page_source)
+                    logger.info("HTML da página salvo em debug_page.html")
+                except:
+                    pass
                 return []
             
             novos_links = set()
             for favorito in favoritos:
                 try:
+                    # Tenta obter o link de diferentes maneiras
                     link = favorito.get_attribute("href")
                     if not link:
+                        # Se não encontrar href direto, tenta encontrar um elemento <a> dentro
+                        link_element = favorito.find_element(By.TAG_NAME, "a")
+                        if link_element:
+                            link = link_element.get_attribute("href")
+                    
+                    if not link:
+                        logger.warning("Link não encontrado em um favorito")
                         continue
+                    
+                    # Converte link relativo para absoluto se necessário
+                    if link.startswith('/'):
+                        link = f"https://www.olx.pt{link}"
+                    
+                    # Remove parâmetros desnecessários do link
+                    if 'reason=observed_ad' in link:
+                        link = link.split('?')[0]
                         
                     # Adiciona parâmetros necessários ao link
-                    link = link.replace("?", "?chat=1&isPreviewActive=0&")
+                    if "?" in link:
+                        link = link.replace("?", "?chat=1&isPreviewActive=0&")
+                    else:
+                        link = f"{link}?chat=1&isPreviewActive=0"
                     
-                    if link and link not in self.links_cache:
+                    # Verifica se o link está no cache
+                    if link not in self.links_cache:
                         novos_links.add(link)
                         self.links_cache.add(link)
-                        logger.debug(f"Novo link encontrado: {link}")
+                        logger.info(f"Novo link encontrado: {link}")
+                    else:
+                        logger.debug(f"Link já existe no cache: {link}")
+                        # Adiciona o link mesmo se já estiver no cache
+                        novos_links.add(link)
                 except Exception as e:
                     logger.error(f"Erro ao processar um favorito: {str(e)}")
                     continue
 
-            logger.info(f"{len(novos_links)} novos links encontrados")
-            return self.links_cache
+            logger.info(f"{len(novos_links)} links encontrados (novos e em cache)")
+            if novos_links:
+                logger.info("Links encontrados:")
+                for link in novos_links:
+                    logger.info(f"- {link}")
+            return list(novos_links)  # Retorna lista de todos os links
         
         except Exception as e:
             logger.error(f"Erro ao acessar favoritos: {str(e)}")
@@ -461,8 +499,56 @@ class OlxScraper:
                     self.driver.switch_to.window(aba)
                     time.sleep(2)  # Pequena pausa para garantir carregamento
                     
-                    anuncio_id = self.driver.current_url.split("/")[-1].split("?")[0]
-                    logger.info(f"Analisando Anúncio ID: {anuncio_id}")
+                    # Extrair informações do anúncio e vendedor
+                    try:
+                        # ID do anúncio
+                        elemento_id = self.wait.until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="ad-details-id"]'))
+                        )
+                        anuncio_id = elemento_id.text.replace("ID: ", "").strip()
+                        
+                        # Nome do vendedor
+                        nome_vendedor = self.wait.until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="username"]'))
+                        ).text.strip()
+                        
+                        # Título do anúncio
+                        titulo_anuncio = self.wait.until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="ad-details-title"]'))
+                        ).text.strip()
+                        
+                        # Preço do anúncio
+                        preco_anuncio = self.wait.until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="ad-details-price"]'))
+                        ).text.strip()
+                        
+                        logger.info(f"Informações extraídas - ID: {anuncio_id}, Vendedor: {nome_vendedor}, Título: {titulo_anuncio}, Preço: {preco_anuncio}")
+                        
+                        # Criar a conversa primeiro
+                        criar_response = requests.post(
+                            f"{self.api_url}/criar-conversa",
+                            params={
+                                "email": CREDENTIALS["username"],
+                                "anuncio_id": anuncio_id
+                            },
+                            timeout=10
+                        )
+                        
+                        if criar_response.status_code != 200:
+                            logger.error(f"Erro ao criar conversa: {criar_response.text}")
+                            continue
+                        
+                        # Enviar informações para a API
+                        self.enviar_info_anuncio_para_api(
+                            anuncio_id=anuncio_id,
+                            nome_vendedor=nome_vendedor,
+                            titulo_anuncio=titulo_anuncio,
+                            preco_anuncio=preco_anuncio
+                        )
+                        
+                    except Exception as e:
+                        logger.error(f"Erro ao extrair informações do anúncio: {e}")
+                        continue
 
                     # Esperar até que o elemento das mensagens esteja presente
                     logger.info("Aguardando carregamento das mensagens...")
@@ -544,6 +630,29 @@ class OlxScraper:
         except Exception as e:
             logger.error(f"Erro ao buscar mensagens novas: {e}")
 
+    def enviar_info_anuncio_para_api(self, anuncio_id: str, nome_vendedor: str, titulo_anuncio: str, preco_anuncio: str) -> bool:
+        """Envia informações do anúncio para a API"""
+        try:
+            response = requests.post(
+                f"{self.api_url}/atualizar-info-anuncio",
+                params={
+                    "email": CREDENTIALS["username"],
+                    "anuncio_id": anuncio_id,
+                    "nome_vendedor": nome_vendedor,
+                    "titulo_anuncio": titulo_anuncio,
+                    "preco_anuncio": preco_anuncio
+                },
+                timeout=10
+            )
+            if response.status_code == 200:
+                logger.info(f"Informações do anúncio {anuncio_id} atualizadas com sucesso")
+                return True
+            else:
+                logger.error(f"Erro ao atualizar informações do anúncio: {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Erro ao enviar informações do anúncio para a API: {e}")
+            return False
 
     def ciclo_de_respostas(self):
         """Loop para buscar mensagens pendentes e gerar respostas automáticas"""
@@ -551,6 +660,10 @@ class OlxScraper:
         
         while True:
             try:
+                # Verificar novas mensagens
+                logger.info("Verificando novas mensagens...")
+                self.extrair_mensagens_vendedor()
+
                 logger.info("Verificando conversas pendentes...")
                 conversas_pendentes = self.buscar_respostas_pendentes()
 
@@ -560,7 +673,7 @@ class OlxScraper:
                             if msg['tipo'] == 'recebida' and not msg['respondida']:
                                 logger.info(f"Gerando resposta para: {msg['mensagem']}")
                                 
-                                resposta = self.obter_resposta_langflow(msg['mensagem'])
+                                resposta = self.obter_resposta_langflow(msg['mensagem'], conversa['anuncio_id'])
                                 
                                 if resposta:
                                     if self.enviar_mensagem_olx(conversa['anuncio_id'], resposta):
@@ -572,10 +685,6 @@ class OlxScraper:
                                 else:
                                     logger.warning(f"Falha ao gerar resposta")
                                     self.atualizar_metricas('erros')
-
-                # Verificar novas mensagens
-                logger.info("Verificando novas mensagens...")
-                self.extrair_mensagens_vendedor()
                 
                 # Atualizar métricas
                 self.metricas['ultima_verificacao'] = datetime.now()
@@ -623,10 +732,6 @@ class OlxScraper:
             logger.info(f"Abrindo {len(links)} anúncios em abas...")
             self.abrir_anuncios_em_abas(links)
             
-            # Processa mensagens
-            logger.info("Processando mensagens existentes...")
-            self.extrair_mensagens_vendedor()
-            
             # Inicia ciclo de respostas
             logger.info("Iniciando ciclo de respostas...")
             self.ciclo_de_respostas()
@@ -643,12 +748,13 @@ class OlxScraper:
             self.log_metricas()
 
 
-    def obter_resposta_langflow(self, mensagem: str, session_id: Optional[str] = None) -> Optional[str]:
+    def obter_resposta_langflow(self, mensagem: str, anuncio_id: str, session_id: Optional[str] = None) -> Optional[str]:
         """
         Envia a mensagem para o Langflow e obtém a resposta.
         
         Args:
             mensagem (str): A mensagem a ser processada pelo Langflow
+            anuncio_id (str): ID do anúncio para buscar histórico
             session_id (str, optional): ID da sessão existente. Se None, gera um novo.
             
         Returns:
@@ -659,6 +765,59 @@ class OlxScraper:
             return None
             
         try:
+            # Buscar informações do anúncio
+            logger.info(f"Buscando informações do anúncio {anuncio_id}")
+            response = requests.get(
+                f"{self.api_url}/info-anuncio",
+                params={
+                    "email": CREDENTIALS["username"],
+                    "anuncio_id": anuncio_id
+                },
+                timeout=10
+            )
+            
+            info_anuncio = {}
+            if response.status_code == 200:
+                info_anuncio = response.json()
+                logger.info(f"Informações do anúncio encontradas: {info_anuncio}")
+            else:
+                logger.warning(f"Erro ao buscar informações do anúncio: {response.text}")
+            
+            # Buscar histórico da conversa
+            logger.info(f"Buscando histórico da conversa para o anúncio {anuncio_id}")
+            response = requests.get(
+                f"{self.api_url}/mensagens",
+                params={
+                    "email": CREDENTIALS["username"],
+                    "anuncio_id": anuncio_id
+                },
+                timeout=10
+            )
+            
+            historico = []
+            if response.status_code == 200:
+                historico = response.json().get("mensagens", [])
+                logger.info(f"Histórico encontrado: {len(historico)} mensagens")
+            else:
+                logger.warning(f"Erro ao buscar histórico: {response.text}")
+            
+            # Formatar histórico para o Langflow
+            historico_formatado = []
+            for msg in historico:
+                historico_formatado.append({
+                    "role": "vendedor" if msg["tipo"] == "recebida" else "comprador",
+                    "content": msg["mensagem"]
+                })
+            
+            # Preparar input_value com as informações do anúncio
+            input_value = [
+                info_anuncio.get("titulo_anuncio", ""),
+                info_anuncio.get("nome_vendedor", ""),
+                info_anuncio.get("preco_anuncio", ""),
+                mensagem,
+                historico_formatado
+            ]
+            
             langflow_url = URLS["Langflow_URL"].replace("/predict/", "/run/")
             logger.info(f"Obtendo resposta para a mensagem: {mensagem}")
             
@@ -675,71 +834,13 @@ class OlxScraper:
                         "chat_icon": "",
                         "clean_data": True,
                         "data_template": "{text}",
-                        "input_value": "",
+                        "input_value": input_value,
                         "sender": "Machine",
-                        "sender_name": "AI",
+                        "sender_name": "Comprador",
                         "session_id": current_session_id,
                         "should_store_message": True,
-                        "text_color": ""
-                    },
-                    "GetEnvVar-fD5AB": {
-                        "env_dir": "",
-                        "env_var_name": "",
-                        "tools_metadata": [
-                            {
-                                "name": "GetEnvVar-process_inputs",
-                                "description": "process_inputs() - Get env var from a specified directory",
-                                "tags": ["GetEnvVar-process_inputs"]
-                            }
-                        ]
-                    },
-                    "CustomComponent-ZQxeP": {
-                        "acao": "",
-                        "anuncio_id": "",
-                        "conversa_id": "",
-                        "email": "",
-                        "mensagem": "",
-                        "respondida": "",
-                        "tipo": "",
-                        "tools_metadata": [
-                            {
-                                "name": "FastAPIClient-process_inputs",
-                                "description": "process_inputs() - Componente para acessar APIs do FastAPI e interagir com a DB",
-                                "tags": ["FastAPIClient-process_inputs"]
-                            }
-                        ]
-                    },
-                    "CustomComponent-iJBo4": {
-                        "input": "",
-                        "tools_metadata": [
-                            {
-                                "name": "ActionSelector-process_inputs",
-                                "description": "process_inputs() - Componente para selecionar a ação a ser executada baseado no contexto da conversa",
-                                "tags": ["ActionSelector-process_inputs"]
-                            }
-                        ]
-                    },
-                    "Agent-tIIK7": {
-                        "add_current_date_tool": True,
-                        "agent_description": "A helpful assistant with access to the following tools:",
-                        "agent_llm": "OpenAI",
-                        "api_key": "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",
-                        "handle_parsing_errors": True,
-                        "input_value": mensagem,
-                        "json_mode": False,
-                        "max_iterations": 15,
-                        "max_retries": 5,
-                        "max_tokens": None,
-                        "model_kwargs": {},
-                        "model_name": "gpt-4o-mini",
-                        "n_messages": 100,
-                        "openai_api_base": "",
-                        "order": "Ascending",
-                        "seed": 1,
-                        "sender": "Machine and User",
-                        "sender_name": "",
-                        "session_id": current_session_id,
-                        "system_prompt": "# Instruções para o AIAgent - Gerenciador de Negociações OLX\n\n## Visão Geral\nVocê é um agente especializado em gerenciar negociações de pranchas de surf no OLX. Você tem acesso a três ferramentas principais que devem ser utilizadas em conjunto para gerenciar as conversas e mensagens.\n\n## Ferramentas Disponíveis\n\n### 1. GetEnvVar\n- **Propósito**: Obter credenciais e configurações do arquivo .env\n- **Uso Inicial**: \n  - Primeiro, você DEVE usar esta ferramenta para obter o email do usuário\n  - Diretório: `C:\\Users\\pedro\\programas\\Olx-SurfBoards-Negotiator`\n  - Variável: `OLX_USERNAME`\n  - Este email será usado em todas as chamadas do FastAPIClient\n\n### 2. ActionSelector\n- **Propósito**: Determinar qual ação deve ser executada baseado no contexto\n- **Ações Possíveis**:\n  - `buscar_mensagens`: Buscar histórico de mensagens\n  - `enviar_mensagem`: Enviar uma nova mensagem\n- **Uso**:\n  - Use esta ferramenta antes de qualquer interação com o FastAPIClient\n  - Forneça o contexto da conversa ou instrução clara\n  - A ferramenta retornará a ação apropriada baseada em palavras-chave:\n    - Para buscar: \"buscar\", \"procurar\", \"encontrar\", \"listar\", \"ver\", \"mostrar\"\n    - Para enviar: \"enviar\", \"mandar\", \"responder\", \"resposta\", \"mensagem\"\n\n### 3. FastAPIClient\n- **Propósito**: Executar ações na API\n- **Parâmetros**:\n  - `acao`: Ação a ser executada (vem do ActionSelector)\n  - `email`: Email do usuário (vem do GetEnvVar)\n  - `anuncio_id`: ID do anúncio (quando necessário)\n  - `mensagem`: Texto da mensagem (quando necessário)\n  - `tipo`: Tipo da mensagem (\"recebida\" ou \"enviada\")\n  - `conversa_id`: ID da conversa (opcional, para filtrar mensagens)\n  - `respondida`: Status de resposta (opcional, para filtrar mensagens)\n- **Fluxo de Uso**:\n  1. Obter email do GetEnvVar\n  2. Usar ActionSelector para determinar a ação\n  3. Executar a ação via FastAPIClient\n\n## Fluxo de Trabalho\n\n1. **Inicialização**:\n   - Use GetEnvVar para obter o OLX_USERNAME\n   - Guarde este email para uso posterior\n\n2. **Ciclo de Trabalho**:\n   - Use ActionSelector para determinar a próxima ação\n   - Execute a ação via FastAPIClient\n   - Processe a resposta\n   - Repita o ciclo\n\n3. **Regras de Validação**:\n   - Sempre verifique se o email foi obtido antes de usar o FastAPIClient\n   - Use o ActionSelector antes de cada chamada ao FastAPIClient\n   - Verifique as respostas da API para garantir sucesso das operações\n\n## Exemplos de Uso\n\n1. **Buscar Mensagens**:\n   ```python\n   # 1. Obter email\n   email = GetEnvVar(env_var_name=\"OLX_USERNAME\", env_dir=\"C:\\\\Users\\\\pedro\\\\programas\\\\Olx-SurfBoards-Negotiator\")\n   \n   # 2. Determinar ação\n   acao = ActionSelector(input=\"buscar mensagens não respondidas\")\n   \n   # 3. Executar ação\n   resultado = FastAPIClient(\n       acao=\"buscar_mensagens\",\n       email=email,\n       respondida=\"false\"\n   )\n   ```\n\n2. **Enviar Mensagem**:\n   ```python\n   # 1. Determinar ação\n   acao = ActionSelector(input=\"enviar mensagem para o anúncio 123\")\n   \n   # 2. Executar ação\n   resultado = FastAPIClient(\n       acao=\"enviar_mensagem\",\n       email=email,\n       anuncio_id=\"123\",\n       mensagem=\"Olá, gostaria de saber mais sobre a prancha\"\n   )\n   ```\n\n## Tratamento de Erros\n- Se o GetEnvVar falhar, não prossiga com outras operações\n- Se o ActionSelector retornar uma ação inválida, use \"buscar_mensagens\" como fallback\n- Se o FastAPIClient retornar erro, tente novamente ou mude a ação\n\n## Prioridades\n1. Manter o email do usuário sempre atualizado\n2. Usar o ActionSelector para cada decisão\n3. Verificar respostas da API antes de prosseguir"
+                        "text_color": "",
+                        "chat_history": historico_formatado  # Adiciona o histórico formatado
                     }
                 }
             }

@@ -11,9 +11,9 @@ def visualizar_banco():
         cursor = conn.cursor()
 
         # Visualiza conversas
-        print("\n" + "="*80)
-        print("📬 CONVERSAS E MENSAGENS".center(80))
-        print("="*80)
+        print("\n" + "="*100)
+        print("📬 CONVERSAS E MENSAGENS".center(100))
+        print("="*100)
 
         cursor.execute("SELECT * FROM conversas")
         conversas = cursor.fetchall()
@@ -22,30 +22,40 @@ def visualizar_banco():
             print("\nNenhuma conversa encontrada no banco de dados.")
         else:
             for conversa in conversas:
-                print("\n" + "-"*80)
+                print("\n" + "="*100)
                 print(f"📝 CONVERSA #{conversa['id']}")
                 print(f"📧 Email: {conversa['email']}")
                 print(f"🔗 Anúncio ID: {conversa['anuncio_id']}")
-                print("-"*80)
+                
+                # Informações do anúncio
+                if conversa['titulo_anuncio']:
+                    print(f"📋 Título: {conversa['titulo_anuncio']}")
+                if conversa['nome_vendedor']:
+                    print(f"👤 Vendedor: {conversa['nome_vendedor']}")
+                if conversa['preco_anuncio']:
+                    print(f"💰 Preço: {conversa['preco_anuncio']}")
+                print("="*100)
 
                 # Busca mensagens desta conversa
-                cursor.execute("SELECT * FROM mensagens WHERE conversa_id = ?", (conversa['id'],))
+                cursor.execute("SELECT * FROM mensagens WHERE conversa_id = ? ORDER BY id", (conversa['id'],))
                 mensagens = cursor.fetchall()
                 
                 if mensagens:
-                    print("\n💬 MENSAGENS:")
+                    print("\n💬 HISTÓRICO DE MENSAGENS:")
+                    print("-"*100)
                     for msg in mensagens:
                         tipo_emoji = "📤" if msg['tipo'] == 'enviada' else "📥"
                         status_emoji = "✅" if msg['respondida'] else "⏳"
                         print(f"\n{tipo_emoji} {msg['tipo'].upper()} {status_emoji}")
                         print(f"   ID: {msg['id']}")
                         print(f"   Mensagem: {msg['mensagem']}")
+                        print("-"*50)
                 else:
                     print("\n💬 Nenhuma mensagem encontrada nesta conversa")
 
-        print("\n" + "="*80)
-        print("FIM DA VISUALIZAÇÃO".center(80))
-        print("="*80 + "\n")
+        print("\n" + "="*100)
+        print("FIM DA VISUALIZAÇÃO".center(100))
+        print("="*100 + "\n")
 
         conn.close()
 

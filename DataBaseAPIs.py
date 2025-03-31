@@ -64,6 +64,9 @@ def criar_tabelas():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     email TEXT NOT NULL,
                     anuncio_id TEXT NOT NULL,
+                    nome_vendedor TEXT,
+                    titulo_anuncio TEXT,
+                    preco_anuncio TEXT,
                     UNIQUE(email, anuncio_id)
                 )
             """)
@@ -139,6 +142,35 @@ def buscar_conversas_pendentes(email: str):
     except Exception as e:
         logger.error(f"Erro ao buscar conversas pendentes na DB: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao buscar conversas")
+
+@app.post("/criar-conversa")
+def criar_conversa(email: str, anuncio_id: str):
+    """Cria uma nova conversa no banco de dados"""
+    try:
+        with get_db() as conn:
+            # Verifica se a conversa já existe
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id FROM conversas 
+                WHERE email = ? AND anuncio_id = ?
+            """, (email, anuncio_id))
+            
+            if cursor.fetchone():
+                logger.info(f"Conversa já existe para email {email} e anúncio {anuncio_id}")
+                return {"message": "Conversa já existe"}
+            
+            # Cria nova conversa
+            cursor.execute("""
+                INSERT INTO conversas (email, anuncio_id)
+                VALUES (?, ?)
+            """, (email, anuncio_id))
+            
+            conn.commit()
+            logger.info(f"Nova conversa criada para email {email} e anúncio {anuncio_id}")
+            return {"message": "Conversa criada com sucesso"}
+    except Exception as e:
+        logger.error(f"Erro ao criar conversa: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/enviar-mensagem")
 def enviar_mensagem(email: str, anuncio_id: str, mensagem_data: MensagemRequest):
@@ -330,6 +362,91 @@ def buscar_mensagens(email: str, tipo: str = None, conversa_id: int = None, anun
     except Exception as e:
         logger.error(f"Erro ao buscar mensagens na DB: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao buscar mensagens")
+
+@app.post("/atualizar-info-anuncio")
+def atualizar_info_anuncio(email: str, anuncio_id: str, nome_vendedor: str, titulo_anuncio: str, preco_anuncio: str):
+    """Atualiza as informações do anúncio na conversa"""
+    try:
+        # Verifica se a conversa existe
+        with get_db() as conn:
+            cursor = conn.cursor()
+            
+            # Verifica se a conversa existe
+            cursor.execute("""
+                SELECT id FROM conversas 
+                WHERE email = ? AND anuncio_id = ?
+            """, (email, anuncio_id))
+            
+            conversa = cursor.fetchone()
+            if not conversa:
+                logger.error(f"Conversa não encontrada para email {email} e anúncio {anuncio_id}")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Conversa não encontrada para email {email} e anúncio {anuncio_id}"
+                )
+            
+            # Tenta atualizar as informações
+            try:
+                cursor.execute("""
+                    UPDATE conversas 
+                    SET nome_vendedor = ?,
+                        titulo_anuncio = ?,
+                        preco_anuncio = ?
+                    WHERE email = ? AND anuncio_id = ?
+                """, (nome_vendedor, titulo_anuncio, preco_anuncio, email, anuncio_id))
+                
+                if cursor.rowcount == 0:
+                    logger.error(f"Nenhuma linha atualizada para email {email} e anúncio {anuncio_id}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Nenhuma linha atualizada para email {email} e anúncio {anuncio_id}"
+                    )
+                
+                conn.commit()
+                logger.info(f"Informações do anúncio atualizadas com sucesso para email {email} e anúncio {anuncio_id}")
+                return {"status": "Informações do anúncio atualizadas com sucesso"}
+                
+            except sqlite3.Error as e:
+                logger.error(f"Erro SQL ao atualizar informações do anúncio: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Erro SQL ao atualizar informações do anúncio: {str(e)}"
+                )
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro inesperado ao atualizar informações do anúncio: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro inesperado ao atualizar informações do anúncio: {str(e)}"
+        )
+
+@app.get("/info-anuncio")
+def buscar_info_anuncio(email: str, anuncio_id: str):
+    """Retorna as informações do anúncio"""
+    try:
+        with get_db() as conn:
+            info = conn.execute(
+                """
+                SELECT nome_vendedor, titulo_anuncio, preco_anuncio
+                FROM conversas
+                WHERE email = ? AND anuncio_id = ?
+                """,
+                (email, anuncio_id)
+            ).fetchone()
+            
+            if info:
+                return {
+                    "nome_vendedor": info["nome_vendedor"],
+                    "titulo_anuncio": info["titulo_anuncio"],
+                    "preco_anuncio": info["preco_anuncio"]
+                }
+            else:
+                return {}
+    except Exception as e:
+        logger.error(f"Erro ao buscar informações do anúncio: {e}")
+        raise HTTPException(status_code=500, detail="Erro interno ao buscar informações do anúncio")
 
 if __name__ == "__main__":
     logger.info("Iniciando servidor FastAPI")
