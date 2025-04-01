@@ -6,7 +6,7 @@ def visualizar_banco():
     """Visualiza o conteúdo do banco de dados"""
     try:
         # Conecta ao banco
-        conn = sqlite3.connect("mensagens.db")
+        conn = sqlite3.connect("DataBase/mensagens.db")
         conn.row_factory = sqlite3.Row  # Permite acessar resultados por nome de coluna
         cursor = conn.cursor()
 

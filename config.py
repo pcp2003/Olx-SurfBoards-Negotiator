@@ -6,8 +6,7 @@ load_dotenv()
 
 # Configurações do navegador
 BROWSER_OPTIONS = {
-    "disable_popup_blocking": True,
-    "headless": False  # Mude para True para executar sem interface gráfica
+    "disable_popup_blocking": True
 }
 
 # Configurações de tempo
@@ -36,5 +35,5 @@ URLS = {
 LOGGING = {
     "level": "INFO",
     "format": "%(asctime)s - %(levelname)s - %(message)s",
-    "file": "olx_scraper.log"
+    "file": "olx_scraper.log"  # Apenas o nome do arquivo, o diretório logs/ será adicionado no código
 } 
