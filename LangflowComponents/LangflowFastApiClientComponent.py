@@ -15,7 +15,9 @@ class FastAPIClient(Component):
     ACOES_PERMITIDAS = [
         "buscar_conversas_pendentes",
         "buscar_mensagens",
-        "enviar_mensagem"
+        "enviar_mensagem",
+        "buscar_info_anuncio",
+        "atualizar_searched_info"
     ]
 
     # Lista de tipos permitidos
@@ -25,7 +27,7 @@ class FastAPIClient(Component):
         MessageTextInput(
             name="acao",
             display_name="Ação",
-            info="Ação a ser executada (buscar_conversas_pendentes, buscar_mensagens, enviar_mensagem)",
+            info="Ação a ser executada (buscar_conversas_pendentes, buscar_mensagens, enviar_mensagem, buscar_info_anuncio, atualizar_searched_info)",
             value="",
             tool_mode=True
         ),
@@ -39,7 +41,7 @@ class FastAPIClient(Component):
         MessageTextInput(
             name="anuncio_id",
             display_name="ID do Anúncio",
-            info="ID do anúncio (necessário apenas para enviar_mensagem)",
+            info="ID do anúncio (necessário para enviar_mensagem, buscar_info_anuncio, atualizar_searched_info)",
             value="",
             tool_mode=True
         ),
@@ -68,6 +70,20 @@ class FastAPIClient(Component):
             name="respondida",
             display_name="Status de Resposta",
             info="Status de resposta da mensagem (true/false) - opcional para buscar_mensagens",
+            value="",
+            tool_mode=True
+        ),
+        MessageTextInput(
+            name="searched_info",
+            display_name="Informações Detalhadas",
+            info="Informações detalhadas do anúncio (necessário para atualizar_searched_info)",
+            value="",
+            tool_mode=True
+        ),
+        MessageTextInput(
+            name="searched_info_filter",
+            display_name="Filtrar por Informações",
+            info="Filtrar conversas por presença de informações detalhadas (true/false) - opcional para buscar_mensagens",
             value="",
             tool_mode=True
         )
@@ -114,7 +130,8 @@ class FastAPIClient(Component):
                         "tipo": self.tipo if self.tipo else None,
                         "conversa_id": str(self.conversa_id) if self.conversa_id else None,
                         "anuncio_id": self.anuncio_id if self.anuncio_id else None,
-                        "respondida": bool(self.respondida.lower() == "true") if self.respondida else None
+                        "respondida": bool(self.respondida.lower() == "true") if self.respondida else None,
+                        "searched_info": bool(self.searched_info_filter.lower() == "true") if self.searched_info_filter else None
                     }
                 },
                 "buscar_conversas_pendentes": {
@@ -122,6 +139,23 @@ class FastAPIClient(Component):
                     "method": "GET",
                     "params": {
                         "email": self.email
+                    }
+                },
+                "buscar_info_anuncio": {
+                    "endpoint": "info-anuncio",
+                    "method": "GET",
+                    "params": {
+                        "email": self.email,
+                        "anuncio_id": self.anuncio_id
+                    }
+                },
+                "atualizar_searched_info": {
+                    "endpoint": "atualizar-searched-info",
+                    "method": "POST",
+                    "params": {
+                        "email": self.email,
+                        "anuncio_id": self.anuncio_id,
+                        "searched_info": self.searched_info
                     }
                 }
             }
@@ -134,6 +168,12 @@ class FastAPIClient(Component):
                     return Data(value="ID do anúncio é obrigatório para enviar mensagem")
                 if not self.mensagem:
                     return Data(value="Mensagem é obrigatória para enviar mensagem")
+            elif self.acao in ["buscar_info_anuncio", "atualizar_searched_info"]:
+                if not self.anuncio_id:
+                    return Data(value="ID do anúncio é obrigatório para esta ação")
+            elif self.acao == "atualizar_searched_info":
+                if not self.searched_info:
+                    return Data(value="Informações detalhadas são obrigatórias para atualizar searched_info")
 
             # Realizar a requisição
             url = f"{base_url}/{acao_config['endpoint']}"

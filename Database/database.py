@@ -44,9 +44,16 @@ def criar_tabelas():
                     nome_vendedor TEXT,
                     titulo_anuncio TEXT,
                     preco_anuncio TEXT,
+                    searched_info TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(email, anuncio_id)
                 )
             """)
+            
+            # Cria índices para conversas
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conversas_email ON conversas(email)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conversas_anuncio ON conversas(anuncio_id)")
             
             # Cria tabela de mensagens
             logger.info("Criando/verificando tabela de mensagens...")
@@ -57,9 +64,15 @@ def criar_tabelas():
                     tipo TEXT CHECK(tipo IN ('enviada', 'recebida')) NOT NULL,
                     mensagem TEXT NOT NULL,
                     respondida BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (conversa_id) REFERENCES conversas (id)
                 )
             """)
+            
+            # Cria índices para mensagens
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mensagens_conversa ON mensagens(conversa_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mensagens_tipo ON mensagens(tipo)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mensagens_respondida ON mensagens(respondida)")
             
             conn.commit()
             logger.info("Tabelas criadas/verificadas com sucesso")

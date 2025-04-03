@@ -9,6 +9,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 import undetected_chromedriver as uc
+from typing import Optional
 
 from config import BROWSER_OPTIONS, TIMEOUTS, CREDENTIALS, URLS
 
@@ -489,3 +490,81 @@ class BrowserManager:
             
         except Exception as e:
             logger.error(f"Erro ao buscar mensagens novas: {e}") 
+
+    def obter_searched_info(self, anuncio_id: str) -> Optional[str]:
+        """Obtém informações detalhadas do anúncio"""
+        try:
+            # Guarda a aba principal
+            aba_principal = self.driver.current_window_handle
+            
+            # Procura a aba do anúncio
+            for handle in self.driver.window_handles:
+                self.driver.switch_to.window(handle)
+                if anuncio_id in self.driver.current_url:
+                    break
+            
+            # Aguarda carregamento da página
+            self.wait.until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            
+            # Coleta informações do anúncio
+            info = []
+            
+            # Título do anúncio
+            try:
+                titulo = self.driver.find_element(By.CSS_SELECTOR, "h1.css-1soizd2").text
+                info.append(f"Título: {titulo}")
+            except:
+                logger.warning("Não foi possível obter o título do anúncio")
+            
+            # Preço
+            try:
+                preco = self.driver.find_element(By.CSS_SELECTOR, "h3.css-46itwz").text
+                info.append(f"Preço: {preco}")
+            except:
+                logger.warning("Não foi possível obter o preço do anúncio")
+            
+            # Descrição
+            try:
+                descricao = self.driver.find_element(By.CSS_SELECTOR, "div.css-g5mtbi").text
+                info.append(f"Descrição: {descricao}")
+            except:
+                logger.warning("Não foi possível obter a descrição do anúncio")
+            
+            # Características
+            try:
+                caracteristicas = self.driver.find_elements(By.CSS_SELECTOR, "div.css-1wws9er")
+                if caracteristicas:
+                    info.append("Características:")
+                    for carac in caracteristicas:
+                        info.append(f"- {carac.text}")
+            except:
+                logger.warning("Não foi possível obter as características do anúncio")
+            
+            # Localização
+            try:
+                localizacao = self.driver.find_element(By.CSS_SELECTOR, "p.css-1wws9er").text
+                info.append(f"Localização: {localizacao}")
+            except:
+                logger.warning("Não foi possível obter a localização do anúncio")
+            
+            # Data de publicação
+            try:
+                data_pub = self.driver.find_element(By.CSS_SELECTOR, "span.css-19yf5ek").text
+                info.append(f"Data de publicação: {data_pub}")
+            except:
+                logger.warning("Não foi possível obter a data de publicação")
+            
+            # Volta para a aba principal
+            self.driver.switch_to.window(aba_principal)
+            
+            if info:
+                return "\n".join(info)
+            else:
+                logger.warning("Nenhuma informação foi coletada do anúncio")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Erro ao obter informações do anúncio: {e}")
+            return None 

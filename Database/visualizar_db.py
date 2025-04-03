@@ -34,6 +34,20 @@ def visualizar_banco():
                     print(f"👤 Vendedor: {conversa['nome_vendedor']}")
                 if conversa['preco_anuncio']:
                     print(f"💰 Preço: {conversa['preco_anuncio']}")
+                
+                # Informações detalhadas do anúncio (searched_info)
+                if conversa['searched_info']:
+                    print("\n🔍 Informações Detalhadas do Anúncio:")
+                    print("-"*50)
+                    print(conversa['searched_info'])
+                    print("-"*50)
+                
+                # Data de criação e atualização
+                if conversa['created_at']:
+                    print(f"\n📅 Criado em: {conversa['created_at']}")
+                if conversa['updated_at']:
+                    print(f"🔄 Atualizado em: {conversa['updated_at']}")
+                
                 print("="*100)
 
                 # Busca mensagens desta conversa
@@ -49,6 +63,8 @@ def visualizar_banco():
                         print(f"\n{tipo_emoji} {msg['tipo'].upper()} {status_emoji}")
                         print(f"   ID: {msg['id']}")
                         print(f"   Mensagem: {msg['mensagem']}")
+                        if msg['created_at']:
+                            print(f"   Data: {msg['created_at']}")
                         print("-"*50)
                 else:
                     print("\n💬 Nenhuma mensagem encontrada nesta conversa")

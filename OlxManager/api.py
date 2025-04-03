@@ -138,4 +138,52 @@ class APIManager:
                 return False
         except Exception as e:
             logger.error(f"Erro ao enviar informações do anúncio para a API: {e}")
-            return False 
+            return False
+
+    def atualizar_searched_info(self, anuncio_id: str, searched_info: str) -> bool:
+        """Atualiza o campo searched_info do anúncio na API"""
+        try:
+            response = requests.post(
+                f"{self.api_url}/atualizar-searched-info",
+                params={
+                    "email": CREDENTIALS["username"],
+                    "anuncio_id": anuncio_id,
+                    "searched_info": searched_info
+                },
+                timeout=10
+            )
+            if response.status_code == 200:
+                logger.info(f"Campo searched_info do anúncio {anuncio_id} atualizado com sucesso")
+                return True
+            elif response.status_code == 404:
+                logger.warning(f"Conversa não encontrada para o anúncio {anuncio_id}")
+                return False
+            else:
+                logger.error(f"Erro ao atualizar searched_info do anúncio: {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Erro ao enviar searched_info para a API: {e}")
+            return False
+
+    def buscar_info_anuncio(self, anuncio_id: str) -> Optional[Dict[str, Any]]:
+        """Busca informações do anúncio na API"""
+        try:
+            response = requests.get(
+                f"{self.api_url}/info-anuncio",
+                params={
+                    "email": CREDENTIALS["username"],
+                    "anuncio_id": anuncio_id
+                },
+                timeout=10
+            )
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 404:
+                logger.warning(f"Informações do anúncio {anuncio_id} não encontradas")
+                return None
+            else:
+                logger.error(f"Erro ao buscar informações do anúncio: {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Erro ao buscar informações do anúncio na API: {e}")
+            return None 
